@@ -110,8 +110,13 @@ class SelectBrawler:
         self.farm_type = value
 
     def start_bot(self):
-        self.data_setter(self.brawlers_data)
-        self.app.destroy()
+        d = self.data_setter
+        b = self.brawlers_data
+        a = self.app
+        d(b)
+        if a:
+            try: a.destroy()
+            except: pass
 
     def load_brawler_config(self):
         # open file select dialog to select a json file
