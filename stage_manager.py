@@ -151,7 +151,7 @@ class StageManager:
                 max_attempts = 30
                 attempts = 0
                 while current_state != "lobby" and attempts < max_attempts:
-                    self.window_controller.press_key("Q")
+                    [time.sleep(0.5) for x, y in [[960, 540], [960, 950], [1660, 980]] if not self.window_controller.click(x, y, 0.02, False)]
                     if debug: print("Pressed Q to return to lobby")
                     time.sleep(1)
                     screenshot = self.window_controller.screenshot()
