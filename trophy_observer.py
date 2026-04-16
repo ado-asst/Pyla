@@ -1,10 +1,7 @@
 import os
 
 import requests
-from difflib import SequenceMatcher
-import numpy as np
-from utils import update_toml_file, load_toml_as_dict, save_dict_as_toml, api_base_url, reader
-
+from utils import load_toml_as_dict, save_dict_as_toml, api_base_url
 class TrophyObserver:
 
     def __init__(self, brawler_list):
@@ -19,29 +16,14 @@ class TrophyObserver:
                                    for brawler in brawler_list}
         self.win_streak = 0
         self.match_counter = 0  # New counter for the number of matches
-        self.trophy_lose_ranges = [(49, 0), (199, 1), (399, 2), (599, 3), (699, 4), (799, 5), (899, 6), (999, 7),
-                                   (1099, 8), (1199, 11), (1299, 13), (1399, 16), (1499, 19), (1599, 22), (1699, 25), (1799, 28), (1899, 31), (1999, 34), (float("inf"), 50)]
-        self.trophy_win_ranges = [(1099, 8), (1199, 7), (1299, 6), (1399, 5), (1499, 4), (1599, 3), (1699, 2), (float("inf"), 1)]
+        self.trophy_lose_ranges = [(49, 0), (299, 1), (599, 2), (799, 3), (999, 4), (1099, 5), (1199, 6), (1299, 7),
+                                   (1499, 8), (1799, 9), (3999, 10), (float("inf"), 15)]
+        self.trophy_win_ranges = [(1999, 10), (2499, 8), (2799, 6), (2999, 4), (3099, 2), (float("inf"), 1)]
         self.crop_region = load_toml_as_dict("./cfg/lobby_config.toml")['lobby']['trophy_observer']
         self.trophies_multiplier = int(load_toml_as_dict("./cfg/general_config.toml")["trophies_multiplier"])
 
-    @staticmethod
-    def rework_game_result(res_string):
-        res_string = res_string.lower()
-        if res_string in ["victory", "defeat", "draw"]:
-            return res_string, 1.0
-
-        ratios = {
-            "victory": SequenceMatcher(None, res_string, 'victory').ratio(),
-            "defeat": SequenceMatcher(None, res_string, 'defeat').ratio(),
-            "draw": SequenceMatcher(None, res_string, "draw").ratio()
-        }
-        highest_ratio_string = max(ratios, key=ratios.get)
-
-        return highest_ratio_string, ratios[highest_ratio_string]
-
     def win_streak_gain(self):
-        return min(self.win_streak - 1, 5)  # Max gain from win streak is 5
+        return min(self.win_streak - 1, 10) if self.current_trophies < 2000 else 0
 
     def calc_lost_decrement(self):
         for max_trophies, loss in self.trophy_lose_ranges:
@@ -109,25 +91,6 @@ class TrophyObserver:
             self.current_wins += 1
 
 
-    def find_game_result(self, screenshot, current_brawler, game_result=None):
-        if not game_result:
-            screenshot = screenshot.crop(self.crop_region)
-            array_screenshot = np.array(screenshot)
-            result = reader.readtext(array_screenshot)
-
-            if len(result) == 0:
-                return False
-
-            _, text, conf = result[0]
-            game_result, ratio = self.rework_game_result(text)
-            if ratio < 0.55:
-                if ratio > 0:
-                    print("Couldn't find game result", game_result, ratio)
-                return False
-
-        self.add_trophies(game_result, current_brawler)
-        self.add_win(game_result)
-        return True
 
     def change_trophies(self, new):
         print(f"Trophies changed from {self.current_trophies} to {new}")

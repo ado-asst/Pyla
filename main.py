@@ -1,6 +1,7 @@
 import asyncio
 import time
 
+import window_controller
 from gui.hub import Hub
 from gui.login import login
 from gui.main import App
@@ -8,17 +9,14 @@ from gui.select_brawler import SelectBrawler
 from lobby_automation import LobbyAutomation
 from play import Play
 from stage_manager import StageManager
-from state_finder.main import get_state
+from state_finder import get_state
 from time_management import TimeManagement
-from utils import load_toml_as_dict, current_wall_model_is_latest, api_base_url, update_icons
+from utils import load_toml_as_dict, current_wall_model_is_latest, api_base_url
 from utils import get_brawler_list, update_missing_brawlers_info, check_version, async_notify_user, \
     update_wall_model_classes, get_latest_wall_model_file, get_latest_version, cprint
 from window_controller import WindowController
 
 pyla_version = load_toml_as_dict("./cfg/general_config.toml")['pyla_version']
-
-debug = load_toml_as_dict("cfg/general_config.toml")['super_debug'] == "yes"
-
 
 def pyla_main(data):
     class Main:
@@ -29,9 +27,9 @@ def pyla_main(data):
             self.Time_management = TimeManagement()
             self.lobby_automator = LobbyAutomation(self.window_controller)
             self.Stage_manager = StageManager(data, self.lobby_automator, self.window_controller)
-            self.states_requiring_data = ["play_store", "lobby"]
+            self.states_requiring_data = ["lobby"]
             if data[0]['automatically_pick']:
-                if debug: print("Picking brawler automatically")
+                print("Picking brawler automatically")
                 self.lobby_automator.select_brawler(data[0]['brawler'])
             self.Play.current_brawler = data[0]['brawler']
             self.no_detections_action_threshold = 60 * 8
@@ -64,18 +62,22 @@ def pyla_main(data):
             return loaded_models
 
         def restart_brawl_stars(self):
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            try:
-                screenshot = self.window_controller.screenshot()
-                loop.run_until_complete(async_notify_user("bot_is_stuck", screenshot))
-            finally:
-                loop.close()
-            print("Bot got stuck. User notified. Shutting down.")
-            self.window_controller.keys_up(list("wasd"))
-            self.window_controller.close()
-            import sys
-            sys.exit(1)
+            self.window_controller.restart_brawl_stars()
+            self.Play.time_since_detections["player"] = time.time()
+            self.Play.time_since_detections["enemy"] = time.time()
+            if self.window_controller.device.app_current().package != window_controller.BRAWL_STARS_PACKAGE:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    screenshot = self.window_controller.screenshot()
+                    loop.run_until_complete(async_notify_user("bot_is_stuck", screenshot))
+                finally:
+                    loop.close()
+                print("Bot got stuck. User notified. Shutting down.")
+                self.window_controller.keys_up(list("wasd"))
+                self.window_controller.close()
+                import sys
+                sys.exit(1)
 
         def manage_time_tasks(self, frame):
             if self.Time_management.state_check():
@@ -83,7 +85,7 @@ def pyla_main(data):
                 self.state = state
                 if state != "match":
                     self.Play.time_since_last_proceeding = time.time()
-                frame_data = frame if state in self.states_requiring_data else None
+                frame_data = None
                 self.Stage_manager.do_state(state, frame_data)
 
             if self.Time_management.no_detections_check():
@@ -108,7 +110,7 @@ def pyla_main(data):
                         cprint(f"timer is done, {self.run_for_minutes} is over. continuing for 3 minutes if in game", "#AAE5A4")
                         self.in_cooldown = True # tries to finish game if in game
                         self.cooldown_start_time = time.time()
-                        self.Stage_manager.states['lobby'] = lambda data: 0
+                        self.Stage_manager.states['lobby'] = lambda: 0
 
                 if self.in_cooldown:
                     if time.time() - self.cooldown_start_time >= self.cooldown_duration:
@@ -127,15 +129,14 @@ def pyla_main(data):
                 _, last_ft = self.window_controller.get_latest_frame()
                 if last_ft > 0 and (time.time() - last_ft) > self.window_controller.FRAME_STALE_TIMEOUT:
                     self.Play.window_controller.keys_up(list("wasd"))
-                    print("Stale frame detected -- pausing actions until feed resumes")
-                    time.sleep(1)
-                    continue
+                    print("Stale frame detected -- restarting the game.")
+                    self.window_controller.restart_brawl_stars()
 
                 self.manage_time_tasks(frame)
 
 
                 brawler = self.Stage_manager.brawlers_pick_data[0]['brawler']
-                self.Play.main(frame, brawler)
+                self.Play.main(frame, brawler, self)
                 c += 1
 
                 if self.max_ips:
@@ -149,10 +150,8 @@ def pyla_main(data):
 
 
 all_brawlers = get_brawler_list()
-update_icons()
 if api_base_url != "localhost":
     update_missing_brawlers_info(all_brawlers)
-
     check_version()
     update_wall_model_classes()
     if not current_wall_model_is_latest():

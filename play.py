@@ -3,13 +3,15 @@ import random
 import time
 
 import cv2
-from shapely import LineString
-from shapely.geometry import Polygon
-from state_finder.main import get_state
+from state_finder import get_state
 from detect import Detect
 from utils import load_toml_as_dict, count_hsv_pixels, load_brawlers_info
 
 brawl_stars_width, brawl_stars_height = 1920, 1080
+debug = load_toml_as_dict("cfg/general_config.toml")['super_debug'] == "yes"
+super_crop_area = load_toml_as_dict("./cfg/lobby_config.toml")['pixel_counter_crop_area']['super']
+gadget_crop_area = load_toml_as_dict("./cfg/lobby_config.toml")['pixel_counter_crop_area']['gadget']
+hypercharge_crop_area = load_toml_as_dict("./cfg/lobby_config.toml")['pixel_counter_crop_area']['hypercharge']
 
 class Movement:
 
@@ -71,8 +73,8 @@ class Movement:
             return "W" if direction_y > 0 else "S"
         return "S" if direction_y > 0 else "W"
 
-    def attack(self):
-        self.window_controller.press_key("M")
+    def attack(self, touch_up=True, touch_down=True):
+        self.window_controller.press_key("M", touch_up=touch_up, touch_down=touch_down)
 
     def use_hypercharge(self):
         print("Using hypercharge")
@@ -183,6 +185,8 @@ class Play(Movement):
         self.super_pixels_minimum = bot_config["super_pixels_minimum"]
         self.wall_detection_confidence = bot_config["wall_detection_confidence"]
         self.entity_detection_confidence = bot_config["entity_detection_confidence"]
+        self.time_since_holding_attack = None
+        self.seconds_to_hold_attack_after_reaching_max = load_toml_as_dict("cfg/bot_config.toml")["seconds_to_hold_attack_after_reaching_max"]
 
     def load_brawler_ranges(self, brawlers_info=None):
         if not brawlers_info:
@@ -206,16 +210,28 @@ class Play(Movement):
             return brawlers_info[brawler]['ignore_walls_for_supers']
         raise ValueError("skill_type must be either 'attack' or 'super'")
 
+    @staticmethod
+    def must_brawler_hold_attack(brawler, brawlers_info=None):
+        if not brawlers_info: brawlers_info = load_brawlers_info()
+        return brawlers_info[brawler]['hold_attack'] > 0
 
     @staticmethod
-    def walls_are_in_line_of_sight(line_of_sight, walls):
+    def walls_block_line_of_sight(p1, p2, walls):
+        if not walls:
+            return False
+
+        p1_t = (int(p1[0]), int(p1[1]))
+        p2_t = (int(p2[0]), int(p2[1]))
+        min_x, max_x = min(p1_t[0], p2_t[0]), max(p1_t[0], p2_t[0])
+        min_y, max_y = min(p1_t[1], p2_t[1]), max(p1_t[1], p2_t[1])
         for wall in walls:
             x1, y1, x2, y2 = wall
-            wall_polygon = Polygon([
-                (x1, y1), (x2, y1),
-                (x2, y2), (x1, y2)
-            ])
-            if line_of_sight.intersects(wall_polygon):
+
+            if max_x < x1 or min_x > x2 or max_y < y1 or min_y > y2:
+                continue
+
+            rect = (int(x1), int(y1), int(x2 - x1), int(y2 - y1))
+            if cv2.clipLine(rect, p1_t, p2_t)[0]:
                 return True
         return False
 
@@ -240,7 +256,7 @@ class Play(Movement):
     def is_enemy_hittable(self, player_pos, enemy_pos, walls, skill_type):
         if self.can_attack_through_walls(self.current_brawler, skill_type, self.brawlers_info):
             return True
-        if self.walls_are_in_line_of_sight(LineString([player_pos, enemy_pos]), walls):
+        if self.walls_block_line_of_sight(player_pos, enemy_pos, walls):
             return False
         return True
 
@@ -285,8 +301,7 @@ class Play(Movement):
         if 'd' in move_direction.lower():
             dx += distance
         new_pos = (player_pos[0] + dx, player_pos[1] + dy)
-        path_line = LineString([player_pos, new_pos])
-        return self.walls_are_in_line_of_sight(path_line, walls)
+        return self.walls_block_line_of_sight(player_pos, new_pos, walls)
 
     @staticmethod
     def validate_game_data(data):
@@ -344,22 +359,41 @@ class Play(Movement):
         return movement
 
     def check_if_hypercharge_ready(self, frame):
-        screenshot = frame.crop((1350 * self.window_controller.width_ratio, 940 * self.window_controller.height_ratio, 1450 * self.window_controller.width_ratio, 1050 * self.window_controller.height_ratio))
+        wr, hr = self.window_controller.width_ratio, self.window_controller.height_ratio
+        x1, y1 = int(hypercharge_crop_area[0] * wr), int(hypercharge_crop_area[1] * hr)
+        x2, y2 = int(hypercharge_crop_area[2] * wr), int(hypercharge_crop_area[3] * hr)
+        screenshot = frame[y1:y2, x1:x2]
         purple_pixels = count_hsv_pixels(screenshot, (137, 158, 159), (179, 255, 255))
+        if debug:
+            print("hypercharge purple pixels:", purple_pixels, "(if > ", self.hypercharge_pixels_minimum, " then hypercharge is ready)")
+            cv2.imwrite(f"debug_frames/hypercharge_debug_{int(time.time())}.png", cv2.cvtColor(screenshot, cv2.COLOR_RGB2BGR))
         if purple_pixels > self.hypercharge_pixels_minimum:
             return True
         return False
 
     def check_if_gadget_ready(self, frame):
-        screenshot = frame.crop((1580 * self.window_controller.width_ratio, 930 * self.window_controller.height_ratio, 1700 * self.window_controller.width_ratio, 1050 * self.window_controller.height_ratio))
+        wr, hr = self.window_controller.width_ratio, self.window_controller.height_ratio
+        x1, y1 = int(gadget_crop_area[0] * wr), int(gadget_crop_area[1] * hr)
+        x2, y2 = int(gadget_crop_area[2] * wr), int(gadget_crop_area[3] * hr)
+        screenshot = frame[y1:y2, x1:x2]
         green_pixels = count_hsv_pixels(screenshot, (57, 219, 165), (62, 255, 255))
+        if debug:
+            print("gadget green pixels:", green_pixels, "(if > ", self.gadget_pixels_minimum, " then gadget is ready)")
+            cv2.imwrite(f"debug_frames/gadget_debug_{int(time.time())}.png", cv2.cvtColor(screenshot, cv2.COLOR_RGB2BGR))
         if green_pixels > self.gadget_pixels_minimum:
             return True
         return False
 
     def check_if_super_ready(self, frame):
-        screenshot = frame.crop((1460 * self.window_controller.width_ratio, 830 * self.window_controller.height_ratio, 1560 * self.window_controller.width_ratio, 930 * self.window_controller.height_ratio))
+        wr, hr = self.window_controller.width_ratio, self.window_controller.height_ratio
+        x1, y1 = int(super_crop_area[0] * wr), int(super_crop_area[1] * hr)
+        x2, y2 = int(super_crop_area[2] * wr), int(super_crop_area[3] * hr)
+        screenshot = frame[y1:y2, x1:x2]
         yellow_pixels = count_hsv_pixels(screenshot, (17, 170, 200), (27, 255, 255))
+        if debug:
+            print("super yellow pixels:", yellow_pixels, "(if > ", self.super_pixels_minimum, " then super is ready)")
+            cv2.imwrite(f"debug_frames/super_debug_{int(time.time())}.png", cv2.cvtColor(screenshot, cv2.COLOR_RGB2BGR))
+
         if yellow_pixels > self.super_pixels_minimum:
             return True
         return False
@@ -384,31 +418,28 @@ class Play(Movement):
         return combined_walls
 
     def combine_walls_from_history(self):
-        wall_counts = {}
-        for walls in self.wall_history:
-            for wall in walls:
-                wall_key = tuple(wall)
-                wall_counts[wall_key] = wall_counts.get(wall_key, 0) + 1
-
-        threshold = 1
-
-        combined_walls = [list(wall) for wall, count in wall_counts.items() if count >= threshold]
-        # print(f"Combined walls: {combined_walls}")
-
-        return combined_walls
+        unique_walls = {tuple(wall) for walls in self.wall_history for wall in walls}
+        return list(unique_walls)
 
     def get_movement(self, player_data, enemy_data, walls, brawler):
         brawler_info = self.brawlers_info.get(brawler)
         if not brawler_info:
             raise ValueError(f"Brawler '{brawler}' not found in brawlers info.")
-        safe_range, attack_range, super_range = self.get_brawler_range(brawler)
+        must_brawler_hold_attack = self.must_brawler_hold_attack(brawler, self.brawlers_info)
+        # if a brawler has been holding an attack for its max duration + the bot setting, then we release
+        if must_brawler_hold_attack and self.time_since_holding_attack is not None and time.time() - self.time_since_holding_attack >= brawler_info['hold_attack'] + self.seconds_to_hold_attack_after_reaching_max:
+            self.attack(touch_up=True, touch_down=False)
+            self.time_since_holding_attack = None
 
+        safe_range, attack_range, super_range = self.get_brawler_range(brawler)
         player_pos = self.get_player_pos(player_data)
+        if debug: print("found player pos:", player_pos)
         if not self.is_there_enemy(enemy_data):
             return self.no_enemy_movement(player_data, walls)
         enemy_coords, enemy_distance = self.find_closest_enemy(enemy_data, player_pos, walls, "attack")
         if enemy_coords is None:
             return self.no_enemy_movement(player_data, walls)
+        if debug: print("found enemy pos:", enemy_coords)
         direction_x = enemy_coords[0] - player_pos[0]
         direction_y = enemy_coords[1] - player_pos[1]
 
@@ -457,21 +488,7 @@ class Play(Movement):
         else:
             self.last_movement_time = current_time  # Reset timer if movement didn't change
 
-        # Attack if enemy is within attack range and hittable
-        if enemy_distance <= attack_range:
-            if self.should_use_gadget == True and self.is_gadget_ready:
-                self.use_gadget()
-                self.time_since_gadget_checked = time.time()
-                self.is_gadget_ready = False
-            if self.is_hypercharge_ready:
-                self.use_hypercharge()
-                self.time_since_hypercharge_checked = time.time()
-                self.is_hypercharge_ready = False
-            enemy_hittable = self.is_enemy_hittable(player_pos, enemy_coords, walls, "attack")
-            # print("enemy hittable", enemy_hittable, "enemy_distance", enemy_distance)
-            if enemy_hittable:
-                self.attack()
-        if self.is_super_ready:
+        if self.is_super_ready and self.time_since_holding_attack is None:
             super_type = brawler_info['super_type']
             enemy_hittable = self.is_enemy_hittable(player_pos, enemy_coords, walls, "super")
 
@@ -480,12 +497,37 @@ class Play(Movement):
                      or super_type in ["spawnable", "other"]
                      or (brawler in ["stu", "surge"] and super_type == "charge" and enemy_distance <= super_range + attack_range)
                     )):
+                if self.is_hypercharge_ready:
+                    self.use_hypercharge()
+                    self.time_since_hypercharge_checked = time.time()
+                    self.is_hypercharge_ready = False
                 self.use_super()
                 self.time_since_super_checked = time.time()
                 self.is_super_ready = False
+
+        # Attack if enemy is within attack range and hittable
+        if enemy_distance <= attack_range:
+            enemy_hittable = self.is_enemy_hittable(player_pos, enemy_coords, walls, "attack")
+            if enemy_hittable:
+                if self.should_use_gadget == True and self.is_gadget_ready and self.time_since_holding_attack is None:
+                    self.use_gadget()
+                    self.time_since_gadget_checked = time.time()
+                    self.is_gadget_ready = False
+
+                if not must_brawler_hold_attack:
+                    self.attack()
+                else:
+                    if self.time_since_holding_attack is None:
+                        self.time_since_holding_attack = time.time()
+                        self.attack(touch_up=False, touch_down=True)
+                    elif time.time() - self.time_since_holding_attack >= self.brawlers_info[brawler]['hold_attack']:
+                        self.attack(touch_up=True, touch_down=False)
+                        self.time_since_holding_attack = None
+
+
         return movement
 
-    def main(self, frame, brawler):
+    def main(self, frame, brawler, main):
         current_time = time.time()
         data = self.get_main_data(frame)
         if self.should_detect_walls and current_time - self.time_since_walls_checked > self.walls_treshold:
@@ -505,6 +547,10 @@ class Play(Movement):
         self.track_no_detections(data)
         if data:
             self.time_since_player_last_found = time.time()
+            if main.state != "match":
+                main.state = get_state(frame)
+                if main.state != "match":
+                    data = None
         if not data:
             if current_time - self.time_since_player_last_found > 1.0:
                 self.window_controller.keys_up(list("wasd"))
@@ -515,8 +561,7 @@ class Play(Movement):
                     self.time_since_last_proceeding = current_time
                 else:
                     print("haven't detected the player in a while proceeding")
-                    w, t = self.window_controller, time.sleep
-                    [t(0.5) for x, y in [[960, 540], [960, 950], [1660, 980]] if not w.click(x, y, 0.02, False)]
+                    self.window_controller.press_key("Q")
                     self.time_since_last_proceeding = time.time()
             return
         self.time_since_last_proceeding = time.time()
@@ -544,66 +589,6 @@ class Play(Movement):
         #         'wall': data.get('wall', []),
         #         'movement': movement,
         #     })
-
-    def generate_visualization(self, output_filename='visualization.mp4'):
-        import cv2
-        import numpy as np
-
-        frame_size = (1920, 1080)  # Adjust as needed
-        fps = 10
-
-        # Initialize VideoWriter
-        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-        out = cv2.VideoWriter(output_filename, fourcc, fps, frame_size)
-
-        for frame_data in self.scene_data:
-            # Create a blank image
-            img = np.zeros((frame_size[1], frame_size[0], 3), np.uint8)
-
-            # Scale factors if needed
-            scale_x = frame_size[0] / 1920
-            scale_y = frame_size[1] / 1080
-
-            if frame_data['wall']:
-                # Draw walls
-                for wall in frame_data['wall']:
-                    x1, y1, x2, y2 = map(int, wall)
-                    x1 = int(x1 * scale_x)
-                    y1 = int(y1 * scale_y)
-                    x2 = int(x2 * scale_x)
-                    y2 = int(y2 * scale_y)
-                    cv2.rectangle(img, (x1, y1), (x2, y2), (128, 128, 128), -1)  # Gray walls
-
-            if frame_data['enemy']:
-                # Draw enemies
-                for enemy in frame_data['enemy']:
-                    x1, y1, x2, y2 = map(int, enemy)
-                    x1 = int(x1 * scale_x)
-                    y1 = int(y1 * scale_y)
-                    x2 = int(x2 * scale_x)
-                    y2 = int(y2 * scale_y)
-                    cv2.rectangle(img, (x1, y1), (x2, y2), (0, 0, 255), -1)  # Red enemies
-
-            if frame_data['player']:
-                # Draw player
-                for player in frame_data['player']:
-                    x1, y1, x2, y2 = map(int, player)
-                    x1 = int(x1 * scale_x)
-                    y1 = int(y1 * scale_y)
-                    x2 = int(x2 * scale_x)
-                    y2 = int(y2 * scale_y)
-                    cv2.rectangle(img, (x1, y1), (x2, y2), (0, 255, 0), -1)  # Green player
-
-            # Draw movement decision
-            movement = frame_data['movement']
-            direction = self.movement_to_direction(movement)
-            cv2.putText(img, f'Movement: {direction}', (10, frame_size[1] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5,
-                        (255, 255, 255), 1)
-
-            # Write frame to video
-            out.write(img)
-
-        out.release()
 
     @staticmethod
     def movement_to_direction(movement):

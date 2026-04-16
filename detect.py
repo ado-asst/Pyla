@@ -1,10 +1,29 @@
+import os
+
 import cv2
 import numpy as np
 import torch
-from PIL import Image
 import onnxruntime as ort
 from ultralytics.utils.nms import non_max_suppression
 from utils import load_toml_as_dict
+import warnings
+
+warnings.filterwarnings(
+    "ignore",
+    message=".*'pin_memory' argument is set as true but no accelerator is found.*",
+    category=UserWarning
+)
+
+debug = load_toml_as_dict("cfg/general_config.toml")['super_debug'] == "yes"
+
+def get_optimal_threads(max_limit=4):
+    threads = os.cpu_count()
+    threads_amount = min(max(2, threads // 2), max_limit)
+    if True: print(f"Detected {threads} CPU threads, using {threads_amount} threads.")
+    return threads_amount
+
+optimal_threads_amount = get_optimal_threads()
+torch.set_num_threads(optimal_threads_amount)
 
 class Detect:
     def __init__(self, model_path, ignore_classes=None, classes=None, input_size=(640, 640)):
@@ -14,6 +33,11 @@ class Detect:
         self.ignore_classes = ignore_classes if ignore_classes else []
         self.input_size = input_size
         self.model, self.device = self.load_model()
+        self._padded_img_buffer = np.full(
+            (1, 3, self.input_size[0], self.input_size[1]),
+            128.0 / 255.0,
+            dtype=np.float32
+        )
 
 
     def load_model(self):
@@ -36,41 +60,23 @@ class Detect:
 
         so = ort.SessionOptions()
         so.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+        so.intra_op_num_threads = optimal_threads_amount
+        so.inter_op_num_threads = optimal_threads_amount
         model = ort.InferenceSession(self.model_path, sess_options=so, providers=[onnx_provider])
 
         return model, onnx_provider
 
     def preprocess_image(self, img):
-        # Ensure the image is a NumPy array
-        if isinstance(img, Image.Image):
-            img = np.array(img)
-
-        # Resize and pad image to the target size while preserving aspect ratio
         h, w, _ = img.shape
         scale = min(self.input_size[0] / h, self.input_size[1] / w)
         new_w = int(w * scale)
         new_h = int(h * scale)
 
-        # Resize the image
         resized_img = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
 
-        # Create a new image and pad it
-        padded_img = np.full((self.input_size[0], self.input_size[1], 3), 128, dtype=np.uint8)
-        padded_img[:new_h, :new_w, :] = resized_img
+        self._padded_img_buffer[0, :, :new_h, :new_w] = np.transpose(resized_img, (2, 0, 1)).astype(np.float32) / 255.0
 
-        # Convert BGR to RGB
-        padded_img = cv2.cvtColor(padded_img, cv2.COLOR_BGR2RGB)
-
-        # Normalize the image
-        padded_img = padded_img.astype(np.float32) / 255.0
-
-        # Reorder dimensions to (channels, height, width)
-        padded_img = np.transpose(padded_img, (2, 0, 1))
-
-        # Add the batch dimension
-        padded_img = np.expand_dims(padded_img, axis=0)
-
-        return torch.from_numpy(padded_img), new_w, new_h
+        return self._padded_img_buffer, new_w, new_h
 
     def postprocess(self, preds, img, orig_img_shape, resized_shape, conf_tresh=0.6):
         # Apply Non-Maximum Suppression (NMS)
@@ -102,10 +108,6 @@ class Detect:
         return results
 
     def detect_objects(self, img, conf_tresh=0.6):
-        # Convert PIL Image to NumPy array if it's not already a NumPy array
-        if isinstance(img, Image.Image):
-            img = np.array(img)
-            img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
         orig_h, orig_w = img.shape[:2]
         orig_img_shape = (orig_h, orig_w)
 
@@ -114,7 +116,7 @@ class Detect:
         resized_shape = (resized_w, resized_h)
 
         # Run inference
-        outputs = self.model.run(None, {'images': preprocessed_img.cpu().numpy()})
+        outputs = self.model.run(None, {'images': preprocessed_img})
 
         # Postprocess the outputs
         detections = self.postprocess(torch.from_numpy(outputs[0]), preprocessed_img, orig_img_shape, resized_shape, conf_tresh)

@@ -6,10 +6,9 @@ import customtkinter as ctk
 import pyautogui
 from PIL import Image
 from customtkinter import CTkImage
-from utils import load_toml_as_dict, update_toml_file, save_brawler_icon, get_dpi_scale
+from utils import load_toml_as_dict, save_brawler_icon, get_dpi_scale, save_dict_as_toml
 from tkinter import filedialog
 
-debug = load_toml_as_dict("cfg/general_config.toml")['super_debug'] == "yes"
 orig_screen_width, orig_screen_height = 1920, 1080
 width, height = pyautogui.size()
 width_ratio = width / orig_screen_width
@@ -110,13 +109,8 @@ class SelectBrawler:
         self.farm_type = value
 
     def start_bot(self):
-        d = self.data_setter
-        b = self.brawlers_data
-        a = self.app
-        d(b)
-        if a:
-            try: a.destroy()
-            except: pass
+        self.data_setter(self.brawlers_data)
+        self.app.destroy()
 
     def load_brawler_config(self):
         # open file select dialog to select a json file
@@ -146,51 +140,91 @@ class SelectBrawler:
     def open_brawler_entry(self, brawler):
         top = ctk.CTkToplevel(self.app)
         top.configure(fg_color=self.colors['ui box gray'])
+        win_w = int(300 * scale_factor)
+        win_h = int(400 * scale_factor)
         top.geometry(
-            f"{str(int(300 * scale_factor))}x{str(int(450 * scale_factor))}+{str(int(1100 * scale_factor))}+{str(int(200 * scale_factor))}")
+            f"{win_w}x{win_h}+{str(int(1100 * scale_factor))}+{str(int(200 * scale_factor))}")
         top.title("Enter Brawler Data")
         top.attributes("-topmost", True)
 
+        # --- Variables ---
         push_until_var = tk.StringVar()
+        trophies_var = tk.StringVar()
+        wins_var = tk.StringVar()
+        current_win_streak_var = tk.StringVar(value="0")
+        auto_pick_var = tk.BooleanVar(value=True) if self.brawlers_data else tk.BooleanVar(value=False)
+
+        # --- Fixed Y positions for placed widgets ---
+        y_title = int(7 * scale_factor)
+        y_buttons = int(50 * scale_factor)
+        y_field1_label = int(100 * scale_factor)
+        y_field1_entry = int(125 * scale_factor)
+        y_field2_label = int(165 * scale_factor)
+        y_field2_entry = int(190 * scale_factor)
+        y_field3_label = int(230 * scale_factor)
+        y_field3_entry = int(255 * scale_factor)
+        y_auto_pick = int(300 * scale_factor)
+        y_submit = int(350 * scale_factor)
+        x_center_label = int(70 * scale_factor)
+        x_center_entry = int(60 * scale_factor)
+        entry_width = int(170 * scale_factor)
+
+        # --- Title ---
+        ctk.CTkLabel(top, text=f"Brawler: {brawler}", font=("Comic sans MS", int(20 * scale_factor)),
+                     text_color=self.colors['red']).place(x=x_center_label, y=y_title)
+
+        # --- Push type buttons ---
+        farm_type_button_frame = ctk.CTkFrame(top, width=int(210 * scale_factor), height=int(40 * scale_factor),
+                                              fg_color=self.colors['ui box gray'])
+        farm_type_button_frame.place(x=int(45 * scale_factor), y=y_buttons)
+
+        # --- Entry widgets (created but NOT placed yet) ---
+        push_until_label = ctk.CTkLabel(top, text="Target Amount", font=("Comic sans MS", int(15 * scale_factor)),
+                     text_color=self.colors['chess white'])
         push_until_entry = ctk.CTkEntry(
             top, textvariable=push_until_var, fg_color=self.colors['ui box gray'], text_color="white",
-            border_color=self.colors['cherry red'], border_width=int(2 * scale_factor), height=int(28 * scale_factor)
+            border_color=self.colors['cherry red'], border_width=int(2 * scale_factor),
+            height=int(28 * scale_factor), width=entry_width
         )
 
-        trophies_var = tk.StringVar()
+        trophies_label = ctk.CTkLabel(top, text="Current Trophies", font=("Comic sans MS", int(15 * scale_factor)),
+                     text_color=self.colors['chess white'])
         trophies_entry = ctk.CTkEntry(
             top, textvariable=trophies_var, fg_color=self.colors['ui box gray'], text_color="white",
-            border_color=self.colors['cherry red'], border_width=int(2 * scale_factor), height=int(28 * scale_factor)
+            border_color=self.colors['cherry red'], border_width=int(2 * scale_factor),
+            height=int(28 * scale_factor), width=entry_width
         )
 
-        wins_var = tk.StringVar()
+        wins_label = ctk.CTkLabel(top, text="Current Wins", font=("Comic sans MS", int(15 * scale_factor)),
+                     text_color=self.colors['chess white'])
         wins_entry = ctk.CTkEntry(
             top, textvariable=wins_var, fg_color=self.colors['ui box gray'], text_color="white",
-            border_color=self.colors['cherry red'], border_width=int(2 * scale_factor), height=int(28 * scale_factor)
+            border_color=self.colors['cherry red'], border_width=int(2 * scale_factor),
+            height=int(28 * scale_factor), width=entry_width
         )
 
-        current_win_streak_var = tk.StringVar(value="0")  # Set the default value to "0"
+        win_streak_label = ctk.CTkLabel(top, text="Current Brawler's Win Streak", font=("Comic sans MS", int(15 * scale_factor)),
+                     text_color=self.colors['chess white'])
         current_win_streak_entry = ctk.CTkEntry(
             top, textvariable=current_win_streak_var, fg_color=self.colors['ui box gray'], text_color="white",
-            border_color=self.colors['cherry red'], border_width=int(2 * scale_factor), height=int(28 * scale_factor)
+            border_color=self.colors['cherry red'], border_width=int(2 * scale_factor),
+            height=int(28 * scale_factor), width=entry_width
         )
 
-        auto_pick_var = tk.BooleanVar(value=True)  # Checkbox variable, ticked by default
         auto_pick_checkbox = ctk.CTkCheckBox(
             top, text="Bot auto-selects brawler", variable=auto_pick_var,
             fg_color=self.colors['cherry red'], text_color="white", checkbox_height=int(24 * scale_factor)
         )
 
         def submit_data():
-            push_until_value = push_until_var.get()
-            push_until_value = int(push_until_value) if push_until_value.isdigit() else ""
+            push_until_raw = push_until_var.get()
+            push_until_value = int(push_until_raw) if push_until_raw.isdigit() else 0
             trophies_raw = trophies_var.get()
             trophies_value = int(trophies_raw) if trophies_raw.isdigit() else 0
-            wins_value = wins_var.get()
-            wins_value = int(wins_value) if wins_value.isdigit() else ""
-            current_win_streak_value = current_win_streak_var.get()
-            if self.farm_type == "trophies" and wins_value == "":
-                wins_value = 0
+            wins_raw = wins_var.get()
+            wins_value = int(wins_raw) if wins_raw.isdigit() else 0
+            current_win_streak_raw = current_win_streak_var.get()
+            current_win_streak_value = int(current_win_streak_raw) if current_win_streak_raw.isdigit() else 0
             data = {
                 "brawler": brawler,
                 "push_until": push_until_value,
@@ -198,19 +232,13 @@ class SelectBrawler:
                 "wins": wins_value,
                 "type": self.farm_type,
                 "automatically_pick": auto_pick_var.get(),
-                "win_streak": int(current_win_streak_value)
+                "win_streak": current_win_streak_value
             }
-
-            if data["type"] == "":
-                if data["trophies"] <= data["wins"]:
-                    data["type"] = "trophies"
-                else:
-                    data["type"] = "wins"
 
             self.brawlers_data = [item for item in self.brawlers_data if item["brawler"] != data["brawler"]]
             self.brawlers_data.append(data)
 
-            if debug: print("Selected Brawler Data :", self.brawlers_data)
+            print("Selected Brawler Data :", self.brawlers_data)
             top.destroy()
 
         submit_button = ctk.CTkButton(
@@ -219,11 +247,75 @@ class SelectBrawler:
             text_color="white", border_width=int(2 * scale_factor), width=int(80 * scale_factor)
         )
 
-        farm_type_button_frame = ctk.CTkFrame(top, width=int(210 * scale_factor), height=int(50 * scale_factor),
-                                              fg_color=self.colors['ui box gray'])
+        # --- All dynamic widgets that can be shown/hidden ---
+        all_dynamic_widgets = [
+            push_until_label, push_until_entry,
+            trophies_label, trophies_entry,
+            wins_label, wins_entry,
+            win_streak_label, current_win_streak_entry,
+            auto_pick_checkbox, submit_button
+        ]
+
+        def hide_all_fields():
+            for w in all_dynamic_widgets:
+                w.place_forget()
+
+        def check_submit_visibility():
+            """Show submit only when push type is selected and required numeric fields are filled."""
+            if self.farm_type == "":
+                submit_button.place_forget()
+                return
+            target_ok = push_until_var.get().isdigit()
+            if self.farm_type == "trophies":
+                fields_ok = target_ok and trophies_var.get().isdigit() and current_win_streak_var.get().isdigit()
+            else:  # wins
+                fields_ok = target_ok and wins_var.get().isdigit()
+            if fields_ok:
+                submit_button.place(x=int(110 * scale_factor), y=y_submit)
+            else:
+                submit_button.place_forget()
+
+        # Trace all entry vars to re-check submit visibility on every keystroke
+        push_until_var.trace_add("write", lambda *a: check_submit_visibility())
+        trophies_var.trace_add("write", lambda *a: check_submit_visibility())
+        wins_var.trace_add("write", lambda *a: check_submit_visibility())
+        current_win_streak_var.trace_add("write", lambda *a: check_submit_visibility())
+
+        def show_trophies_fields():
+            hide_all_fields()
+            self.farm_type = "trophies"
+            self.wins_button.configure(fg_color=self.colors['ui box gray'])
+            self.trophies_button.configure(fg_color=self.colors['cherry red'])
+            # Field 1: Target Amount
+            push_until_label.place(x=x_center_label, y=y_field1_label)
+            push_until_entry.place(x=x_center_entry, y=y_field1_entry)
+            # Field 2: Current Trophies
+            trophies_label.place(x=x_center_label, y=y_field2_label)
+            trophies_entry.place(x=x_center_entry, y=y_field2_entry)
+            # Field 3: Win Streak
+            win_streak_label.place(x=int(40 * scale_factor), y=y_field3_label)
+            current_win_streak_entry.place(x=x_center_entry, y=y_field3_entry)
+            # Auto-pick checkbox
+            auto_pick_checkbox.place(x=int(60 * scale_factor), y=y_auto_pick)
+            check_submit_visibility()
+
+        def show_wins_fields():
+            hide_all_fields()
+            self.farm_type = "wins"
+            self.wins_button.configure(fg_color=self.colors['cherry red'])
+            self.trophies_button.configure(fg_color=self.colors['ui box gray'])
+            # Field 1: Target Amount
+            push_until_label.place(x=x_center_label, y=y_field1_label)
+            push_until_entry.place(x=x_center_entry, y=y_field1_entry)
+            # Field 2: Current Wins
+            wins_label.place(x=x_center_label, y=y_field2_label)
+            wins_entry.place(x=x_center_entry, y=y_field2_entry)
+            # Auto-pick checkbox
+            auto_pick_checkbox.place(x=int(60 * scale_factor), y=y_auto_pick)
+            check_submit_visibility()
 
         self.wins_button = ctk.CTkButton(farm_type_button_frame, text="Win Amount", width=int(90 * scale_factor),
-                                            command=lambda: self.set_farm_type_color("wins"),
+                                            command=show_wins_fields,
                                             hover_color=self.colors['cherry red'],
                                             font=("", int(15 * scale_factor)),
                                             fg_color=self.colors["ui box gray"],
@@ -231,7 +323,7 @@ class SelectBrawler:
                                             border_width=int(2 * scale_factor)
                                             )
         self.trophies_button = ctk.CTkButton(farm_type_button_frame, text="Trophies", width=int(85 * scale_factor),
-                                             command=lambda: self.set_farm_type_color("trophies"),
+                                             command=show_trophies_fields,
                                              hover_color=self.colors['cherry red'],
                                              font=("", int(15 * scale_factor)),
                                              fg_color=self.colors["ui box gray"],
@@ -241,33 +333,6 @@ class SelectBrawler:
         self.trophies_button.place(x=int(10 * scale_factor))
         self.wins_button.place(x=int(110 * scale_factor))
 
-        ctk.CTkLabel(top, text=f"Brawler: {brawler}", font=("Comic sans MS", int(20 * scale_factor)),
-                     text_color=self.colors['red']).pack(
-            pady=int(7 * scale_factor))
-        farm_type_button_frame.pack()
-        ctk.CTkLabel(top, text="Target Amount", font=("Comic sans MS", int(15 * scale_factor)),
-                     text_color=self.colors['chess white']).pack()
-        push_until_entry.pack(pady=int(4 * scale_factor))
-        ctk.CTkLabel(top, text="Current Trophies", font=("Comic sans MS", int(15 * scale_factor)),
-                     text_color=self.colors['chess white']).pack()
-        trophies_entry.pack(pady=int(4 * scale_factor))
-        ctk.CTkLabel(top, text="Current Wins", font=("Comic sans MS", int(15 * scale_factor)),
-                     text_color=self.colors['chess white']).pack()
-        wins_entry.pack(pady=int(4 * scale_factor))
-        ctk.CTkLabel(top, text="Current Brawler's Win Streak", font=("Comic sans MS", int(15 * scale_factor)),
-                     text_color=self.colors['chess white']).pack()
-        current_win_streak_entry.pack(pady=int(4 * scale_factor))
-        auto_pick_checkbox.pack(pady=int(4 * scale_factor))  # Add the checkbox to the UI
-        submit_button.pack(pady=int(7 * scale_factor))
-
-    def set_farm_type_color(self, value):
-        self.farm_type = value
-        if value == "wins":
-            self.wins_button.configure(fg_color=self.colors['cherry red'])
-            self.trophies_button.configure(fg_color=self.colors['ui box gray'])
-        else:
-            self.wins_button.configure(fg_color=self.colors['ui box gray'])
-            self.trophies_button.configure(fg_color=self.colors['cherry red'])
 
     def update_images(self, filter_text):
         for widget in self.image_frame.winfo_children():
@@ -292,7 +357,7 @@ class SelectBrawler:
             minutes = int(value)
             config = load_toml_as_dict("cfg/general_config.toml")
             config['run_for_minutes'] = minutes
-            update_toml_file("cfg/general_config.toml", config)
+            save_dict_as_toml(config, "cfg/general_config.toml", )
         except ValueError:
             pass  # Ignore invalid input
 

@@ -5,7 +5,6 @@ from io import BytesIO
 import ctypes
 import json
 import aiohttp
-import google_play_scraper
 import requests
 import toml
 from PIL import Image
@@ -14,8 +13,6 @@ import discord
 import cv2
 import numpy as np
 from packaging import version
-import bettercam
-import time
 import easyocr
 
 def extract_text_and_positions(image_path):
@@ -45,24 +42,33 @@ class DefaultEasyOCR:
     def readtext(self, image_input):
         return self.reader.readtext(image_input)
 
+
+cached_toml = {}
+
 def load_toml_as_dict(file_path):
-    if os.path.exists(file_path):
-        with open(file_path, 'r') as f:
-            return toml.load(f)
-    else:
-        return {}
+    if file_path not in cached_toml:
+        if os.path.exists(file_path):
+            with open(file_path, 'r') as f:
+                cached_toml[file_path] = toml.load(f)
+        else:
+            cached_toml[file_path] = {}
+    return cached_toml[file_path]
+
+def save_dict_as_toml(data, file_path):
+    with open(file_path, 'w') as f:
+        toml.dump(data, f)
+    cached_toml[file_path] = data
 
 
 reader = DefaultEasyOCR()
-api_base_url = "localhost"
+cfg_api_base_url = load_toml_as_dict("cfg/general_config.toml")["api_base_url"]
+api_base_url = cfg_api_base_url if cfg_api_base_url != "default" else "localhost"
 brawlers_info_file_path = "cfg/brawlers_info.json"
 
-def count_hsv_pixels(pil_image, low_hsv, high_hsv):
-    opencv_image = cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2BGR)
-    hsv_image = cv2.cvtColor(opencv_image, cv2.COLOR_BGR2HSV)
-    mask = cv2.inRange(hsv_image, np.array(low_hsv), np.array(high_hsv))
-    pixel_count = np.count_nonzero(mask)
-    return pixel_count
+def count_hsv_pixels(cv_image, low_hsv, high_hsv):
+    hsv_image = cv2.cvtColor(cv_image, cv2.COLOR_RGB2HSV)
+    mask = cv2.inRange(hsv_image, low_hsv, high_hsv)
+    return cv2.countNonZero(mask)
 
 def save_brawler_data(data):
     """
@@ -74,12 +80,12 @@ def save_brawler_data(data):
 
 
 def find_template_center(main_img, template, threshold=0.8):
-    main_image_cv = cv2.cvtColor(np.array(main_img), cv2.COLOR_RGB2GRAY)
-    template_arr = np.array(template)
-    if len(template_arr.shape) == 3 and template_arr.shape[2] == 3:
-        template_cv = cv2.cvtColor(template_arr, cv2.COLOR_BGR2GRAY)
+
+    main_image_cv = cv2.cvtColor(main_img, cv2.COLOR_RGB2GRAY)
+    if len(template.shape) == 3 and template.shape[2] == 3:
+        template_cv = cv2.cvtColor(template, cv2.COLOR_BGR2GRAY)
     else:
-        template_cv = template_arr
+        template_cv = template
     w, h = template_cv.shape[::-1]
 
     # Perform template matching
@@ -95,18 +101,6 @@ def find_template_center(main_img, template, threshold=0.8):
     else:
         return False
 
-
-
-
-
-def save_dict_as_toml(data, file_path):
-    with open(file_path, 'w') as f:
-        toml.dump(data, f)
-
-
-def update_toml_file(path, new_data):
-    with open(path, 'w') as file:
-        toml.dump(new_data, file)
 
 def load_brawlers_info():
     if os.path.exists(brawlers_info_file_path):
@@ -190,45 +184,6 @@ def save_brawler_icon(brawler_name):
     print(f"Icon not found for brawler '{brawler_name}'")
 
 
-def update_icons():
-    try:
-        icon_link = google_play_scraper.app("com.supercell.brawlstars")["icon"]
-    except:
-        time.sleep(1)
-        try:
-            icon_link = google_play_scraper.app("com.supercell.brawlstars")["icon"]
-        except Exception as e:
-            print(f"Failed to get latest icon link from Google Play Store: {e}")
-            return
-
-    response = requests.get(icon_link)
-    big_icon = 'brawl_stars_icon_big.png'
-    small_icon = 'brawl_stars_icon.png'
-    if response.status_code == 200:
-        icon_image = Image.open(BytesIO(response.content))
-
-        # big icon
-        big_icon_image = icon_image.resize((69, 69))
-        width, height = big_icon_image.size
-        left = (width - 50) / 2
-        top = (height - 50) / 2
-        right = (width + 50) / 2
-        bottom = (height + 50) / 2
-        big_icon_image = big_icon_image.crop((left, top, right, bottom))
-        big_icon_image.save(f'./state_finder/images_to_detect/{big_icon}')
-
-        # small icon resize to 16x16
-        small_icon_image = icon_image.resize((16, 16))
-        width, height = small_icon_image.size
-        left = (width - 12) / 2
-        top = (height - 12) / 2
-        right = (width + 12) / 2
-        bottom = (height + 12) / 2
-        small_icon_image = small_icon_image.crop((left, top, right, bottom))
-        small_icon_image.save(f'./state_finder/images_to_detect/{small_icon}')
-        print(f"Updated to the latest icon !")
-    else:
-        print(f"Failed to download latest icon. Status code: {response.status_code}")
 
 
 def get_latest_version():
@@ -262,12 +217,13 @@ async def async_notify_user(message_type: str | None = None, screenshot: Image =
         status_line = f"Pyla has completed all its targets!"
         ping = f"<@{user_id}>"
     elif message_type == "bot_is_stuck":
-        status_line = f"Your bot is currently stuck!"
+        status_line = f"Your bot is currently stuck, attempted to restart brawl stars !"
         ping = f"<@{user_id}>"
     else:
         status_line = f"Pyla completed brawler goal for {message_type}!"
         ping = f"<@{user_id}>"
 
+    screenshot = Image.fromarray(screenshot)
     buffer = io.BytesIO()
     screenshot.save(buffer, format="PNG")
     buffer.seek(0)
@@ -350,7 +306,7 @@ def update_wall_model_classes():
             print("New wall model classes found. Updating...")
             full_config = load_toml_as_dict("cfg/bot_config.toml")
             full_config["wall_model_classes"] = classes
-            update_toml_file("cfg/bot_config.toml", full_config)
+            save_dict_as_toml(full_config, "cfg/bot_config.toml")
             print("Updated the wall model classes.")
     else:
         print("Failed to update the wall model classes, please report this error.")

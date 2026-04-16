@@ -3,11 +3,9 @@ import sys
 import customtkinter as ctk
 import webbrowser
 import os
-import time
 import pyautogui
 from PIL import Image
 import tkinter as tk
-import bettercam
 from utils import load_toml_as_dict, save_dict_as_toml, get_discord_link, get_dpi_scale
 from packaging import version
 
@@ -113,7 +111,7 @@ class Hub:
         self.tabview = ctk.CTkTabview(
             self.app,
             width=S(980),
-            height=S(640),
+            height=S(730),
             corner_radius=S(10)
         )
         self.tabview.pack(pady=S(10), padx=S(10), fill="x", expand=False)
@@ -363,7 +361,7 @@ class Hub:
             self.gm3_frame, "brawlball", "Brawlball", orientation=3
         )
         self.rb_showdown_3 = create_gamemode_button(
-            self.gm3_frame, "showdown", "Showdown (Disabled)", disabled=True, orientation=3
+            self.gm3_frame, "showdown", "Showdown (Not Implemented yet)", disabled=True, orientation=3
         )
         self.rb_other_3 = create_gamemode_button(
             self.gm3_frame, "other", "Other", orientation=3
@@ -512,7 +510,7 @@ class Hub:
         # -----------------------------------------------------------------
         start_button = ctk.CTkButton(
             container,
-            text="Start",
+            text="Next",
             fg_color="#c0392b",
             hover_color="#e74c3c",
             font=("Arial", S(24), "bold"),
@@ -996,41 +994,35 @@ class Hub:
     #  On Start => close window + callback
     # ---------------------------------------------------------------------------------------------
     def _on_start(self):
-        o = sys.stdout
-        e = sys.stderr
-        f1 = o.fileno()
-        f2 = e.fileno()
-        s1 = os.dup(f1)
-        s2 = os.dup(f2)
-        n = os.open(os.devnull, os.O_RDWR)
-        os.dup2(n, f1)
-        os.dup2(n, f2)
-        os.close(n)
-        a = self.app
-        if a:
-            for s in ["<ButtonPress>", "<MouseWheel>", "<KeyPress>", "<FocusOut>"]:
-                try: a.unbind_all(s)
-                except: pass
-            try: a.unbind("<Configure>")
-            except: pass
-            if self._tooltip_after_id:
-                try: a.after_cancel(self._tooltip_after_id)
-                except: pass
-            k = getattr(a, 'tk', None)
-            if k:
-                try:
-                    if k.eval('info procs ::bgerror'):
-                        k.eval('rename ::bgerror ::_bgold')
-                    k.eval('proc ::bgerror args {}')
-                except: pass
-            try: a.destroy()
-            except: pass
-        os.dup2(s1, f1)
-        os.dup2(s2, f2)
-        os.close(s1)
-        os.close(s2)
-        sys.stdout = o
-        sys.stderr = e
+        sys.stdout.flush()
+        o_out, o_err = sys.stdout, sys.stderr
+        fd_out, fd_err = o_out.fileno(), o_err.fileno()
+        saved_out, saved_err = os.dup(fd_out), os.dup(fd_err)
+        dn = os.open(os.devnull, os.O_RDWR)
+        os.dup2(dn, fd_out); os.dup2(dn, fd_err); os.close(dn)
+
+        tkint = getattr(getattr(self, 'app', None), 'tk', None)
+        renamed = False
+        if tkint:
+            try:
+                if tkint.eval('info procs ::bgerror'):
+                    tkint.eval('rename ::bgerror ::_old_bgerr'); renamed = True
+                tkint.eval('proc ::bgerror args {}')
+            except tk.TclError:
+                pass
+
+        try: self.app.destroy()
+        except Exception: pass
+        os.dup2(saved_out, fd_out); os.dup2(saved_err, fd_err)
+        os.close(saved_out); os.close(saved_err)
+        sys.stdout, sys.stderr = o_out, o_err
+
+        if tkint:
+            try:
+                tkint.eval('rename ::bgerror {}')
+                if renamed: tkint.eval('rename ::_old_bgerr ::bgerror')
+            except tk.TclError: pass
+
         if callable(self.on_close_callback):
             self.on_close_callback()
 

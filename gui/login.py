@@ -3,9 +3,10 @@ import sys
 
 import customtkinter as ctk  # Import the customtkinter library
 from gui.api import check_if_exists
-from utils import api_base_url
+from utils import api_base_url, save_dict_as_toml
+
 sys.path.append(os.path.abspath('../'))
-from utils import update_toml_file, load_toml_as_dict
+from utils import  load_toml_as_dict
 
 
 def login(logged_in_setter):
@@ -23,7 +24,7 @@ def login(logged_in_setter):
             result_label.configure(text="Login Successful!", text_color="green")
             logged_in_setter(True)
             app.destroy()
-            update_toml_file("./cfg/login.toml", {"key": api_key})
+            save_dict_as_toml({"key": api_key}, "./cfg/login.toml")
             return
         else:
             result_label.configure(text="Invalid API Key", text_color="red")
