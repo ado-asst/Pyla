@@ -2,75 +2,68 @@ import atexit
 import math
 import threading
 import time
-import cv2
-from typing import List
-
+from math import pi
 import scrcpy
-from adbutils import adb
+from adbutils import adb, AdbError
+from debug_view import DebugViewPublisher
+from utils import config_bool, load_toml_as_dict, save_dict_as_toml
 
-from utils import load_toml_as_dict
-
-# --- Configuration ---
 brawl_stars_width, brawl_stars_height = 1920, 1080
 
-key_coords_dict = {
-    "H": (1400, 990),
-    "G": (1640, 990),
-    "M": (1725, 800),
-    "Q": (1660, 980),
-    "E": (1510, 880),
-    "F": (1360, 920),
+press_coords_dict = {
+    "hypercharge": (1400, 990),
+    "gadget": (1640, 990),
+    "attack": (1725, 800),
+    "proceed": (1660, 980),
+    "middle_got_it": (960, 980),
+    "super": (1510, 880),
+    "play_again": (1360, 920),
 }
-
-directions_xy_deltas_dict = {
-    "w": (0, -150),
-    "a": (-150, 0),
-    "s": (0, 150),
-    "d": (150, 0),
-}
-
-BRAWL_STARS_PACKAGE = load_toml_as_dict("cfg/general_config.toml")["brawl_stars_package"]
 
 
 class WindowController:
-    def __init__(self):
+    def __init__(self, max_ips="auto"):
         self.scale_factor = None
         self.width = None
         self.height = None
         self.width_ratio = None
         self.height_ratio = None
         self.joystick_x, self.joystick_y = None, None
-        # --- 2. ADB & Scrcpy Connection ---
+        self._rgb_frame_buffer = None
+        self.BRAWL_STARS_PACKAGE = load_toml_as_dict("cfg/general_config.toml")["brawl_stars_package"]
+
         print("Connecting to ADB...")
         try:
-            # Connect to device (adbutils automatically handles port detection mostly)
-            # but adbutils is usually smarter at finding the open device.
             device_list = adb.device_list()
             if not device_list:
-                # Try connecting to common ports if empty
                 for port in [load_toml_as_dict("cfg/general_config.toml")["emulator_port"], 5555, 16384, 5635] + list(range(5565, 5756, 10)):
                     try:
-                         adb.connect(f"127.0.0.1:{port}")
+                        adb.connect(f"127.0.0.1:{port}")
                     except Exception:
-                         pass
+                        pass
                 device_list = adb.device_list()
 
             if not device_list:
-                 raise ConnectionError("No ADB devices found.")
+                raise ConnectionError("No ADB devices found.")
 
             self.device = device_list[0]
             print(f"Connected to device: {self.device.serial}")
 
             self.frame_lock = threading.Lock()
-            self.scrcpy_client = scrcpy.Client(device=self.device, max_width=0)
+            self.max_ips = max_ips
+            self.scrcpy_client = scrcpy.Client(device=self.device, max_width=0, bitrate=4000000) if self.max_ips == "auto" else scrcpy.Client(device=self.device, max_width=0, bitrate=4000000, max_fps=self.max_ips)
             self.last_frame = None
             self.last_frame_time = 0.0
             self.last_joystick_pos = (None, None)
             self.FRAME_STALE_TIMEOUT = 15.0
+            self.re_apply_movement = config_bool(
+                load_toml_as_dict("cfg/debug_settings.toml").get("re_apply_movement"),
+                True
+            )
+            self.debug_view = DebugViewPublisher.from_config()
 
             def on_frame(frame):
                 if frame is not None:
-                    frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                     with self.frame_lock:
                         self.last_frame = frame
                         self.last_frame_time = time.time()
@@ -81,12 +74,12 @@ class WindowController:
             print("Scrcpy client started successfully.")
 
         except Exception as e:
-            raise ConnectionError(f"Failed to initialize Scrcpy: {e}")
+            print(f"Error during ADB/scrcpy initialization: {e}\n")
+            print(f"Failed to connect to the emulator/device.\nMake sure you have ADB enabled in your emulator settings. If you don't know how, check https://vimeo.com/1174882529?fl=pl&fe=s.\n if it still doesn't work, check https://discord.com/channels/1205263029269438574/1227618442073342002/1499331741838610433 to try fixing it.")
+            exit(-1)
         self.are_we_moving = False
-        self.PID_JOYSTICK = 1  # ID for WASD movement
-        self.PID_ATTACK = 2  # ID for clicks/attacks
-        self.check_if_brawl_stars_crashed_timer = load_toml_as_dict("cfg/time_tresholds.toml")["check_if_brawl_stars_crashed"]
-        self.time_since_checked_if_brawl_stars_crashed = time.time()
+        self.PID_JOYSTICK = 1
+        self.PID_ATTACK = 2
 
     def get_latest_frame(self):
         with self.frame_lock:
@@ -94,25 +87,72 @@ class WindowController:
                 return None, 0.0
             return self.last_frame, self.last_frame_time
 
+    def reconnect_scrcpy(self, max_retries=3):
+        for attempt in range(1, max_retries + 1):
+            print(f"Scrcpy reconnect attempt {attempt}/{max_retries}")
+            try:
+                self.scrcpy_client.stop()
+            except Exception:
+                pass
+            time.sleep(1)
+
+            with self.frame_lock:
+                self.last_frame = None
+                self.last_frame_time = 0.0
+
+            self.are_we_moving = False
+            self.last_joystick_pos = (None, None)
+
+            def on_frame(frame):
+                if frame is not None:
+                    with self.frame_lock:
+                        self.last_frame = frame
+                        self.last_frame_time = time.time()
+
+            try:
+                self.scrcpy_client = scrcpy.Client(device=self.device, max_width=0, bitrate=4000000) if self.max_ips == "auto" else scrcpy.Client(device=self.device, max_width=0, bitrate=4000000, max_fps=self.max_ips)
+                self.scrcpy_client.add_listener(scrcpy.EVENT_FRAME, on_frame)
+                self.scrcpy_client.start(threaded=True)
+            except Exception as e:
+                print(f"Scrcpy client creation failed: {e}")
+                time.sleep(2 * attempt)
+                continue
+
+            deadline = time.time() + 8
+            while time.time() < deadline:
+                _, ft = self.get_latest_frame()
+                if ft > 0 and (time.time() - ft) < 2:
+                    print(f"Scrcpy feed restored on attempt {attempt}")
+                    return True
+                time.sleep(0.5)
+
+            print(f"Attempt {attempt} did not restore frame feed")
+            time.sleep(2 * attempt)
+
+        print("All scrcpy reconnect attempts exhausted")
+        return False
+
     def restart_brawl_stars(self):
-        self.device.app_stop(BRAWL_STARS_PACKAGE)
+        self.device.app_stop(self.BRAWL_STARS_PACKAGE)
         time.sleep(1)
-        self.device.app_start(BRAWL_STARS_PACKAGE)
+        self.device.app_start(self.BRAWL_STARS_PACKAGE)
         time.sleep(3)
-        self.time_since_checked_if_brawl_stars_crashed = time.time()
         print("Brawl stars restarted successfully.")
 
-    def screenshot(self):
-        c_time = time.time()
-        if c_time - self.time_since_checked_if_brawl_stars_crashed > self.check_if_brawl_stars_crashed_timer:
+    def is_brawl_stars_running(self):
+        try:
             opened_app = self.device.app_current().package.strip()
-            if opened_app != BRAWL_STARS_PACKAGE.strip():
-                print(f"Brawl stars has crashed, {opened_app} is the app opened ! Restarting...")
-                self.device.app_start(BRAWL_STARS_PACKAGE)
-                time.sleep(3)
-                self.time_since_checked_if_brawl_stars_crashed = time.time()
-            else:
-                self.time_since_checked_if_brawl_stars_crashed = c_time
+            if opened_app == "bsd.suitcase.release" and self.BRAWL_STARS_PACKAGE != "bsd.suitcase.release":
+                general_config = load_toml_as_dict("cfg/general_config.toml")
+                general_config["brawl_stars_package"] = "bsd.suitcase.release"
+                save_dict_as_toml(general_config, "cfg/general_config.toml")
+                print("Detected Brawl Stars running under the 'bsd.suitcase.release' package. Updating configuration to match.")
+            return opened_app == self.BRAWL_STARS_PACKAGE.strip()
+        except Exception as e:
+            print(f"Error checking if Brawl Stars is running: {e}")
+            return False
+
+    def screenshot(self):
         frame, frame_time = self.get_latest_frame()
 
         deadline = time.time() + 15
@@ -130,20 +170,18 @@ class WindowController:
         if frame_time > 0 and age > self.FRAME_STALE_TIMEOUT:
             print(f"WARNING: scrcpy frame is {age:.1f}s stale -- feed may be frozen")
 
-
         if not self.width or not self.height:
             self.width = frame.shape[1]
             self.height = frame.shape[0]
             if (self.width, self.height) != (brawl_stars_width, brawl_stars_height):
-                print(f"⚠️⚠️⚠️Unexpected resolution: {self.width}x{self.height}. Expected {brawl_stars_width}x{brawl_stars_height}. Please set your emulator resolution to 1920x1080 for best results.")
+                print(f"WARNING: Unexpected resolution: {self.width}x{self.height}. Expected {brawl_stars_width}x{brawl_stars_height}. Please set your emulator resolution to 1920x1080 for best results.")
             self.width_ratio = self.width / brawl_stars_width
             self.height_ratio = self.height / brawl_stars_height
             self.joystick_x, self.joystick_y = 220 * self.width_ratio, 870 * self.height_ratio
             self.scale_factor = min(self.width_ratio, self.height_ratio)
-
         return frame
+
     def touch_down(self, x, y, pointer_id=0):
-        # We explicitly pass the pointer_id
         self.scrcpy_client.control.touch(int(x), int(y), scrcpy.ACTION_DOWN, pointer_id)
 
     def touch_move(self, x, y, pointer_id=0):
@@ -152,45 +190,43 @@ class WindowController:
     def touch_up(self, x, y, pointer_id=0):
         self.scrcpy_client.control.touch(int(x), int(y), scrcpy.ACTION_UP, pointer_id)
 
-    def keys_up(self, keys: List[str]):
-        if "".join(keys).lower() == "wasd":
-            if self.are_we_moving:
-                # Use PID_JOYSTICK so we don't lift the attack finger
-                self.touch_up(self.joystick_x, self.joystick_y, pointer_id=self.PID_JOYSTICK)
-                self.are_we_moving = False
-                self.last_joystick_pos = (None, None)
-
-    def keys_down(self, keys: List[str]):
-
-        delta_x, delta_y = 0, 0
-        for key in keys:
-            if key in directions_xy_deltas_dict:
-                dx, dy = directions_xy_deltas_dict[key]
-                delta_x += dx
-                delta_y += dy
-
+    def move(self, x, y):
+        target_x = self.joystick_x + x
+        target_y = self.joystick_y + y
         if not self.are_we_moving:
             self.touch_down(self.joystick_x, self.joystick_y, pointer_id=self.PID_JOYSTICK)
+            self.touch_move(target_x, target_y, pointer_id=self.PID_JOYSTICK)
             self.are_we_moving = True
-            self.last_joystick_pos = (self.joystick_x + delta_x, self.joystick_y + delta_y)
+            self.last_joystick_pos = (target_x, target_y)
+            return
 
-        if self.last_joystick_pos != (self.joystick_x + delta_x, self.joystick_y + delta_y):
-            self.touch_move(self.joystick_x + delta_x, self.joystick_y + delta_y, pointer_id=self.PID_JOYSTICK)
-            self.last_joystick_pos = (self.joystick_x + delta_x, self.joystick_y + delta_y)
+        if not self.re_apply_movement and self.last_joystick_pos == (target_x, target_y):
+            return
 
-    def click(self, x: int, y: int, delay=0.05, already_include_ratio=True, touch_up=True, touch_down=True):
+        self.touch_move(target_x, target_y, pointer_id=self.PID_JOYSTICK)
+        self.last_joystick_pos = (target_x, target_y)
+
+    def release_movement(self):
+        if self.are_we_moving:
+            self.touch_up(self.joystick_x, self.joystick_y, pointer_id=self.PID_JOYSTICK)
+            self.are_we_moving = False
+            self.last_joystick_pos = (None, None)
+
+    def click(self, x: int, y: int, delay=0.02, already_include_ratio=True, touch_up=True, touch_down=True):
         if not already_include_ratio:
             x = x * self.width_ratio
             y = y * self.height_ratio
-        # Use PID_ATTACK for clicks so we don't interrupt movement
-        if touch_down: self.touch_down(x, y, pointer_id=self.PID_ATTACK)
-        time.sleep(delay)
-        if touch_up: self.touch_up(x, y, pointer_id=self.PID_ATTACK)
+        try:
+            if touch_down: self.touch_down(x, y, pointer_id=self.PID_ATTACK)
+            time.sleep(delay)
+            if touch_up: self.touch_up(x, y, pointer_id=self.PID_ATTACK)
+        except OSError as e:
+            print(f"OSError during click - likely scrcpy connection issue. {e}")
 
-    def press_key(self, key, delay=0.05, touch_up=True, touch_down=True):
-        if key not in key_coords_dict:
+    def press(self, key, delay=0.02, touch_up=True, touch_down=True):
+        if key not in press_coords_dict:
             return
-        x, y = key_coords_dict[key]
+        x, y = press_coords_dict[key]
         target_x = x * self.width_ratio
         target_y = y * self.height_ratio
         self.click(target_x, target_y, delay, touch_up=touch_up, touch_down=touch_down)
@@ -217,5 +253,21 @@ class WindowController:
         self.touch_up(int(end_x), int(end_y), pointer_id=self.PID_ATTACK)
 
     def close(self):
-        if hasattr(self, 'scrcpy_client'):
-            self.scrcpy_client.stop()
+        try:
+            self.debug_view.close()
+        except Exception as exc:
+            print(f"Debug view close failed: {exc}")
+        self.stop_scrcpy_with_timeout()
+
+    def stop_scrcpy_with_timeout(self, timeout=2.0):
+        def stop_client():
+            try:
+                self.scrcpy_client.stop()
+            except Exception as exc:
+                print(f"Scrcpy stop failed: {exc}")
+
+        stop_thread = threading.Thread(target=stop_client, daemon=True, name="scrcpy-stop")
+        stop_thread.start()
+        stop_thread.join(timeout=timeout)
+        if stop_thread.is_alive():
+            print("Scrcpy stop is still running in the background; continuing shutdown.")

@@ -1,11 +1,9 @@
 .venv/
 /.idea
 *.pyc
-cfg/match_history.toml
 latest_brawler_data.json
-cfg/match_history.toml
 test.py
-/debug_frames
+debug_frames/
 venv/
 /dist
 /build
@@ -13,7 +11,5 @@ main.spec
 PylaAI.zip
 start.bat
 run.py
-web_ui/server.py
-web_ui/static/main.js
-web_ui/static/style.css
-web_ui/templates/index.html
+stuff_to_copy_paste/
+test2.py

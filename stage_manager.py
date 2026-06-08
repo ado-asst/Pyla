@@ -1,61 +1,43 @@
-import os.path
 import sys
-
-import asyncio
 import time
-
 import cv2
-import numpy as np
-import requests
 
-from state_finder import get_state, find_game_result
+from state_finder import get_state
 from trophy_observer import TrophyObserver
-from utils import find_template_center, load_toml_as_dict, async_notify_user, \
-    save_brawler_data
+from utils import find_template_center, load_toml_as_dict, notify_user, save_brawler_data
 
-user_id = load_toml_as_dict("cfg/general_config.toml")['discord_id']
-debug = load_toml_as_dict("cfg/general_config.toml")['super_debug'] == "yes"
-user_webhook = load_toml_as_dict("cfg/general_config.toml")['personal_webhook']
+try:
+    from early_access.early_access import get_brawler_stats, get_player_info
+    early_access = True
+except (ImportError, ModuleNotFoundError):
+    early_access = False
 
+    def get_brawler_stats(_player_info, _brawler_name, _power_level=False):
+        return None, None
 
-def notify_user(message_type):
-    # message type will be used to have conditions determining the message
-    # but for now there's only one possible type of message
-    message_data = {
-        'content': f"<@{user_id}> Pyla Bot has completed all it's targets !"
-    }
-
-    response = requests.post(user_webhook, json=message_data)
-
-    if response.status_code != 204:
-        print(
-            f'Failed to send message. Be sure to have put a valid webhook url in the config. Status code: {response.status_code}')
+    def get_player_info(_tag):
+        return None
 
 
 def load_image(image_path, scale_factor):
-    # Load the image
     image = cv2.imread(image_path)
     orig_height, orig_width = image.shape[:2]
 
-    # Calculate the new dimensions based on the scale factor
     new_width = int(orig_width * scale_factor)
     new_height = int(orig_height * scale_factor)
 
-    # Resize the image
     resized_image = cv2.resize(image, (new_width, new_height))
     return resized_image
 
-class StageManager:
 
-    def __init__(self, brawlers_data, lobby_automator, window_controller):
+class StageManager:
+    def __init__(self, brawlers_data, lobby_automator, window_controller, playstyle_info, state_getting, runtime_control=None):
         self.Lobby_automation = lobby_automator
         self.lobby_config = load_toml_as_dict("./cfg/lobby_config.toml")
         self.close_popup_icon = None
         self.brawlers_pick_data = brawlers_data
-        brawler_list = [brawler["brawler"] for brawler in brawlers_data]
-        self.Trophy_observer = TrophyObserver(brawler_list)
+        self.Trophy_observer = TrophyObserver()
         self.time_since_last_stat_change = time.time()
-        self.long_press_star_drop = load_toml_as_dict("./cfg/general_config.toml")["long_press_star_drop"]
         self.play_again_on_win = load_toml_as_dict("./cfg/bot_config.toml")["play_again_on_win"] == "yes"
         self.window_controller = window_controller
         self.states = {
@@ -63,13 +45,46 @@ class StageManager:
             'brawler_selection': self.quit_shop,
             'popup': self.close_pop_up,
             'match': lambda: 0,
+            'match_making': lambda: 0,
+            'lobby': self.start_game,
+            'star_drop_regular': lambda: self.click_star_drop("regular"),
+            'star_drop_angelic': lambda: self.click_star_drop("angelic"),
+            'star_drop_demonic': lambda: self.click_star_drop("demonic"),
+            'star_drop_starr_nova': lambda: self.click_star_drop("starr_nova"),
+            'trophy_reward': lambda: self.window_controller.press("proceed"),
+            'starr_nova_event': lambda: self.window_controller.press("middle_got_it"),
             'end_draw': self.end_game,
             'end_victory': self.end_game,
             'end_defeat': self.end_game,
-            'lobby': self.start_game,
-            'star_drop': self.click_star_drop,
-            'trophy_reward': lambda: self.window_controller.press_key("Q")
+            'end_trio_showdown_0': self.end_game,
+            'end_trio_showdown_1': self.end_game,
+            'end_trio_showdown_2': self.end_game,
+            'end_trio_showdown_3': self.end_game
         }
+        self.matches_since_last_webhook_ping = 0
+        self.ping_every_x_match = load_toml_as_dict("cfg/webhook_config.toml")['ping_every_x_match']
+        self.runtime_control = runtime_control
+        if early_access:
+            self.player_tag = load_toml_as_dict("./cfg/general_config.toml")['player_tag']
+        self.ping_when_stuck = load_toml_as_dict("cfg/webhook_config.toml")["ping_when_stuck"]
+        self.playstyle_info = playstyle_info
+        self.get_latest_state = state_getting
+
+    def _should_stop(self):
+        return bool(self.runtime_control and self.runtime_control.should_stop())
+
+    def _should_pause(self):
+        return bool(self.runtime_control and self.runtime_control.should_pause())
+
+    def _sleep_interruptible(self, duration, allow_pause=True, poll_interval=0.1):
+        end_time = time.time() + duration
+        while time.time() < end_time:
+            if self._should_stop():
+                return True
+            if allow_pause and self._should_pause():
+                return True
+            time.sleep(min(poll_interval, max(end_time - time.time(), 0)))
+        return False
 
     @staticmethod
     def validate_trophies(trophies_string):
@@ -85,6 +100,23 @@ class StageManager:
         return trophy_value
 
     def start_game(self):
+        if self._should_stop() or self._should_pause():
+            return
+
+        if early_access and self.player_tag:
+            print("Waiting 3 seconds for API to update with latest data...")
+            time.sleep(3)
+            player_info = get_player_info(self.player_tag)
+            if not player_info:
+                print("Player tag is incorrect. Use your Brawl Stars player tag, not your Supercell ID. Skipping API stat refresh.")
+            else:
+                current_brawler = self.brawlers_pick_data[0]['brawler']
+                trophies, win_streak = get_brawler_stats(player_info, current_brawler)
+                if trophies is not None and win_streak is not None:
+                    if trophies != self.Trophy_observer.current_trophies or win_streak != self.Trophy_observer.win_streak:
+                        print(f"Warning: Trophies or win streak from API do not match current values. This may indicate a desync. API values: trophies={trophies}, win_streak={win_streak}. Current values: trophies={self.Trophy_observer.current_trophies}, win_streak={self.Trophy_observer.win_streak}")
+                    self.Trophy_observer.current_trophies = trophies
+                    self.Trophy_observer.win_streak = win_streak
         print("state is lobby, starting game")
         values = {
             "trophies": self.Trophy_observer.current_trophies,
@@ -92,76 +124,91 @@ class StageManager:
         }
 
         type_of_push = self.brawlers_pick_data[0]['type']
-        if type_of_push not in values:
-            type_of_push = "trophies"
         value = values[type_of_push]
-        if value == "" and type_of_push == "wins":
-            value = 0
         push_current_brawler_till = self.brawlers_pick_data[0]['push_until']
-        if push_current_brawler_till == "" and type_of_push == "wins":
-            push_current_brawler_till = 300
-        if push_current_brawler_till == "" and type_of_push == "trophies":
-            push_current_brawler_till = 1000
 
         if value >= push_current_brawler_till:
             if len(self.brawlers_pick_data) <= 1:
                 print("Brawler reached required trophies/wins. No more brawlers selected for pushing in the menu. "
                       "Bot will now pause itself until closed.", value, push_current_brawler_till)
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                try:
-                    screenshot = self.window_controller.screenshot()
-                    loop.run_until_complete(async_notify_user("completed", screenshot))
-                finally:
-                    loop.close()
+                screenshot = self.window_controller.screenshot()
+                notify_user("completed", screenshot, self)
                 print("Bot stopping: all targets completed with no more brawlers.")
-                self.window_controller.keys_up(list("wasd"))
+                self.window_controller.release_movement()
                 self.window_controller.close()
                 sys.exit(0)
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            try:
+            ping_when_target_is_reached = load_toml_as_dict("cfg/webhook_config.toml")["ping_when_target_is_reached"]
+            if ping_when_target_is_reached:
                 screenshot = self.window_controller.screenshot()
-                loop.run_until_complete(async_notify_user(self.brawlers_pick_data[0]["brawler"], screenshot))
-            finally:
-                loop.close()
+                notify_user("brawler_goal", screenshot, self)
+            print(f'Bot has reached the target trophies/wins for {self.brawlers_pick_data[0]["brawler"]}, moving on to the next one in the list.', value, push_current_brawler_till)
             self.brawlers_pick_data.pop(0)
-            self.Trophy_observer.change_trophies(self.brawlers_pick_data[0]['trophies'])
-            self.Trophy_observer.current_wins = self.brawlers_pick_data[0]['wins'] if self.brawlers_pick_data[0]['wins'] != "" else 0
-            self.Trophy_observer.win_streak = self.brawlers_pick_data[0]['win_streak']
+
             next_brawler_name = self.brawlers_pick_data[0]['brawler']
             if self.brawlers_pick_data[0]["automatically_pick"]:
-                print("Picking next automatically picked brawler")
-                screenshot = self.window_controller.screenshot()
-                current_state = get_state(screenshot)
-                if current_state != "lobby":
-                    print("Trying to reach the lobby to switch brawler")
-
-                max_attempts = 30
-                attempts = 0
-                while current_state != "lobby" and attempts < max_attempts:
-                    self.window_controller.press_key("Q")
-                    print("Pressed Q to return to lobby")
-                    time.sleep(1)
-                    screenshot = self.window_controller.screenshot()
-                    current_state = get_state(screenshot)
-                    attempts += 1
-                if attempts >= max_attempts:
-                    print("Failed to reach lobby after max attempts")
-                else:
-                    self.Lobby_automation.select_brawler(next_brawler_name)
+                select_brawler = self.Lobby_automation.select_brawler(next_brawler_name, self.get_latest_state, runtime_control=self.runtime_control)
+                while select_brawler in ["failed", "error"]:
+                    if self.ping_when_stuck:
+                        screenshot = self.window_controller.screenshot()
+                        notify_user("bot_failed_brawler_selection", screenshot, self)
+                        print(f"Skipping {select_brawler}")
+                    if self._should_stop() or self._should_pause():
+                        return
+                    if len(self.brawlers_pick_data) < 1:
+                        print("No more brawlers selected for pushing in the menu. Bot will now pause itself until closed.")
+                        screenshot = self.window_controller.screenshot()
+                        notify_user("completed", screenshot, self)
+                        print("Bot stopping: all targets completed with no more brawlers.")
+                        self.window_controller.release_movement()
+                        self.window_controller.close()
+                        sys.exit(0)
+                    current_brawler = self.brawlers_pick_data.pop(0)
+                    self.brawlers_pick_data.append(current_brawler)
+                    next_brawler_name = self.brawlers_pick_data[0]['brawler']
+                    self.quit_shop()
+                    select_brawler = self.Lobby_automation.select_brawler(next_brawler_name, runtime_control=self.runtime_control)
+                if select_brawler == "aborted" or select_brawler == "stuck":
+                    return
+                if select_brawler == "success":
+                    self.Trophy_observer.change_trophies(self.brawlers_pick_data[0]['trophies'])
+                    self.Trophy_observer.current_wins = self.brawlers_pick_data[0]['wins'] if self.brawlers_pick_data[0]['wins'] != "" else 0
+                    self.Trophy_observer.win_streak = self.brawlers_pick_data[0]['win_streak']
             else:
+                self.Trophy_observer.change_trophies(self.brawlers_pick_data[0]['trophies'])
+                self.Trophy_observer.current_wins = self.brawlers_pick_data[0]['wins'] if self.brawlers_pick_data[0]['wins'] != "" else 0
+                self.Trophy_observer.win_streak = self.brawlers_pick_data[0]['win_streak']
                 print("Next brawler is in manual mode, waiting 10 seconds to let user switch.")
+                if self._sleep_interruptible(10):
+                    return
+        save_brawler_data(self.brawlers_pick_data)
+        self.matches_since_last_webhook_ping += 1
+        if self.ping_every_x_match and self.matches_since_last_webhook_ping >= self.ping_every_x_match:
+            screenshot = self.window_controller.screenshot()
+            notify_user("regular_matches_ping", screenshot, self)
+            self.matches_since_last_webhook_ping = 0
 
-        # q btn is over the start btn
-        self.window_controller.keys_up(list("wasd"))
-        self.window_controller.press_key("Q")
-        print("Pressed Q to start a match")
-    def click_star_drop(self):
-        if self.long_press_star_drop == "yes":
-            self.window_controller.press_key("Q",10)
-        else:
-            self.window_controller.press_key("Q")
+        if self._should_stop() or self._should_pause():
+            return
+        self.window_controller.release_movement()
+        self.window_controller.press("proceed")
+        print("Pressed to start a match")
+        time.sleep(2)
+
+    def click_star_drop(self, drop_type="regular"):
+        if hasattr(self, '_star_drop_thread') and self._star_drop_thread.is_alive():
+            return
+
+        def _handle_drop():
+            if drop_type in ["angelic", "demonic", "starr_nova"]:
+                self.window_controller.press("proceed", 8)
+            else:
+                for _ in range(8):
+                    self.window_controller.press("proceed", 0.05)
+                    time.sleep(0.1)
+        
+        import threading
+        self._star_drop_thread = threading.Thread(target=_handle_drop, daemon=True)
+        self._star_drop_thread.start()
 
     def end_game(self):
         screenshot = self.window_controller.screenshot()
@@ -171,13 +218,13 @@ class StageManager:
         button_pressed = False
         end_screen_time = time.time()
         
-        while current_state.startswith("end") and time.time() - end_screen_time < 25:
-            if time.time() - self.time_since_last_stat_change > 10:
+        while current_state.startswith("end") and time.time() - end_screen_time < 35:
 
-                # , current_brawler=self.brawlers_pick_data[0]['brawler']
-                found_game_result = current_state.split("_")[1]
+            if time.time() - self.time_since_last_stat_change > 25:
+                found_game_result = '_'.join(current_state.split("_")[1:])
                 current_brawler = self.brawlers_pick_data[0]['brawler']
-                self.Trophy_observer.add_trophies(found_game_result, current_brawler)
+                power_level = None if not early_access else get_brawler_stats(get_player_info(self.player_tag), current_brawler, power_level=True)[2]
+                self.Trophy_observer.add_trophies(found_game_result, current_brawler, self.playstyle_info, power_level)
                 self.Trophy_observer.add_win(found_game_result)
                 self.time_since_last_stat_change = time.time()
                 values = {
@@ -185,75 +232,45 @@ class StageManager:
                     "wins": self.Trophy_observer.current_wins
                 }
                 type_to_push = self.brawlers_pick_data[0]['type']
-                if type_to_push not in values:
-                    type_to_push = "trophies"
                 value = values[type_to_push]
                 self.brawlers_pick_data[0][type_to_push] = value
+                self.brawlers_pick_data[0]['win_streak'] = self.Trophy_observer.win_streak
                 save_brawler_data(self.brawlers_pick_data)
-                push_current_brawler_till = self.brawlers_pick_data[0]['push_until']
 
-                if value == "" and type_to_push == "wins":
-                    value = 0
-                if push_current_brawler_till == "" and type_to_push == "wins":
-                    push_current_brawler_till = 300
-                if push_current_brawler_till == "" and type_to_push == "trophies":
-                    push_current_brawler_till = 1000
-
-                if value >= push_current_brawler_till:
-                    if len(self.brawlers_pick_data) <= 1:
-                        print(
-                            "Brawler reached required trophies/wins. No more brawlers selected for pushing in the menu. "
-                            "Bot will now pause itself until closed.")
-                        loop = asyncio.new_event_loop()
-                        asyncio.set_event_loop(loop)
-                        try:
-                            screenshot = self.window_controller.screenshot()
-                            loop.run_until_complete(async_notify_user("completed", screenshot))
-                        finally:
-                            loop.close()
-                        if os.path.exists("latest_brawler_data.json"):
-                            os.remove("latest_brawler_data.json")
-                        print("Bot stopping: all targets completed.")
-                        self.window_controller.keys_up(list("wasd"))
-                        self.window_controller.close()
-                        sys.exit(0)
-            
-            if not button_pressed:
-                if self.play_again_on_win and found_game_result == "victory":
-                    self.window_controller.press_key("F")
-                else:
-                    print("Game has ended, pressing Q")
-                    self.window_controller.press_key("Q")
-                    time.sleep(2)
-                    print("Pressing Q again")
-                    self.window_controller.press_key("Q")
+            if not button_pressed and self.play_again_on_win and found_game_result == "victory" and not self._should_pause() and not self._should_stop():
+                self.window_controller.press("play_again")
                 button_pressed = True
+            else:
+                print("Game has ended, proceeding")
+                self.window_controller.press("proceed")
             
-            time.sleep(0.5)
+            time.sleep(3)
             screenshot = self.window_controller.screenshot()
             current_state = get_state(screenshot)
         
-        if self.play_again_on_win and found_game_result == "victory":
+        if self.play_again_on_win and found_game_result == "victory" and not self._should_pause():
             print("Waiting for match to start...")
             start_wait_time = time.time()
             while time.time() - start_wait_time < 25:
+                if self._should_stop() or self._should_pause():
+                    break
                 screenshot = self.window_controller.screenshot()
                 current_state = get_state(screenshot)
                 if current_state == "match":
                     print("Match started successfully!")
                     return
-                time.sleep(0.5)
+                if self._sleep_interruptible(0.5):
+                    break
             
-            print("Match did not start within 25s, pressing Q to return to lobby.")
-            self.window_controller.press_key("Q")
+            print("Match did not start within 25s, proceeding to return to lobby.")
+            self.window_controller.press("proceed")
             time.sleep(2)
-            print("Pressing Q again")
-            self.window_controller.press_key("Q")
         
         print("Game has ended", current_state)
 
     def quit_shop(self):
         self.window_controller.click(100*self.window_controller.width_ratio, 60*self.window_controller.height_ratio)
+        time.sleep(1)
 
     def close_pop_up(self):
         screenshot = self.window_controller.screenshot()
@@ -268,4 +285,3 @@ class StageManager:
             self.states[state](data)
             return
         self.states[state]()
-

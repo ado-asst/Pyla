@@ -6,7 +6,7 @@
         "super_range": 490,
         "ignore_walls_for_attacks": false,
         "ignore_walls_for_supers": true,
-        "hold_attack":0
+        "hold_attack": 0
     },
     "colt": {
         "safe_range": 324.0,
@@ -577,7 +577,7 @@
     },
     "hank": {
         "safe_range": 0.0,
-        "attack_range": 213.0,
+        "attack_range": 680.0,
         "super_type": "other",
         "super_range": 0,
         "ignore_walls_for_attacks": true,
@@ -873,30 +873,66 @@
         "hold_attack": 0
     },
     "pierce": {
-      "safe_range": 305,
-      "attack_range": 614,
-      "super_type": "damage",
-      "super_range": 315,
-      "ignore_walls_for_attacks": false,
-      "ignore_walls_for_supers": true,
-      "hold_attack": 0
+        "safe_range": 305,
+        "attack_range": 614,
+        "super_type": "damage",
+        "super_range": 315,
+        "ignore_walls_for_attacks": false,
+        "ignore_walls_for_supers": true,
+        "hold_attack": 0
     },
     "glowy": {
-      "safe_range": 315,
-      "attack_range": 512,
-      "super_type": "damage",
-      "super_range": 362,
-      "ignore_walls_for_attacks": false,
-      "ignore_walls_for_supers": false,
-      "hold_attack": 0
+        "safe_range": 315,
+        "attack_range": 512,
+        "super_type": "damage",
+        "super_range": 362,
+        "ignore_walls_for_attacks": false,
+        "ignore_walls_for_supers": false,
+        "hold_attack": 0
     },
     "sirius": {
-      "safe_range": 288.0,
-      "attack_range": 469.0,
-      "super_type": "other",
-      "super_range": 640,
-      "ignore_walls_for_attacks": true,
-      "ignore_walls_for_supers": true,
-      "hold_attack": 0
+        "safe_range": 288.0,
+        "attack_range": 469.0,
+        "super_type": "other",
+        "super_range": 640,
+        "ignore_walls_for_attacks": true,
+        "ignore_walls_for_supers": true,
+        "hold_attack": 0
+    },
+    "najia": {
+        "attack_range": 810,
+        "ignore_walls_for_attacks": false,
+        "ignore_walls_for_supers": true,
+        "safe_range": 236,
+        "super_range": 341,
+        "super_type": "damage",
+        "hold_attack": 0
+    },
+    "damian": {
+        "attack_range": 170,
+        "ignore_walls_for_attacks": false,
+        "ignore_walls_for_supers": true,
+        "safe_range": 0,
+        "super_range": 576,
+        "super_type": "charge",
+        "hold_attack": 0
+    },
+    "bolt": {
+        "attack_range": 999,
+        "ignore_walls_for_attacks": false,
+        "ignore_walls_for_supers": false,
+        "safe_range": 0,
+        "super_range": 0,
+        "super_type": "other",
+        "hold_attack": 0
+    },
+    "starrnova": {
+        "attack_range": 363,
+        "ignore_walls_for_attacks": false,
+        "ignore_walls_for_supers": false,
+        "safe_range": 223,
+        "super_range": 277,
+        "super_type": "dash",
+        "hold_attack": 0
     }
 }
