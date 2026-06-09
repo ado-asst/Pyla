@@ -47,6 +47,7 @@ class Play:
         self.hypercharge_treshold = time_config["hypercharge"]
         self.walls_treshold = time_config["wall_detection"]
         self.last_walls_data = []
+        self.last_bushes_data = []
         self.keys_hold = []
         self.time_since_different_movement = time.time()
         self.time_since_gadget_checked = time.time()
@@ -487,6 +488,9 @@ class Play:
         if 'wall' not in data.keys() or not data['wall']:
             data['wall'] = []
 
+        if 'bushes' not in data.keys() or not data['bushes']:
+            data['bushes'] = []
+
         return False if incomplete else data
 
     def track_no_detections(self, data):
@@ -524,6 +528,7 @@ class Play:
                 'teammate_data': data['teammate'],
                 'brawler': brawler,
                 'walls': data['wall'],
+                'bushes': data['bushes'],
                 'brawlers_info': self.brawlers_info,
                 'must_brawler_hold_attack': self.must_brawler_hold_attack,
                 'is_gadget_ready': self.is_gadget_ready,
@@ -661,10 +666,13 @@ class Play:
 
     def process_tile_data(self, tile_data):
         walls = []
+        bushes = []
         for class_name, boxes in tile_data.items():
             if 'bush' not in class_name:
                 walls.extend(boxes)
-        return walls
+            else:
+                bushes.extend(boxes)
+        return walls, bushes
 
     def get_movement(self):
         movement, updated_globals = interpret_pyla_code(self.pyla_code, self.context)
@@ -723,12 +731,15 @@ class Play:
         data = self.get_main_data(frame)
         if current_time - self.time_since_walls_checked > self.walls_treshold:
             tile_data = self.get_tile_data(frame, data.get("player"))
-            walls = self.process_tile_data(tile_data)
+            walls, bushes = self.process_tile_data(tile_data)
             self.time_since_walls_checked = current_time
             self.last_walls_data = walls
             data['wall'] = walls
+            self.last_bushes_data = bushes
+            data['bush'] = bushes
         else:
             data['wall'] = self.last_walls_data
+            data['bush'] = self.last_bushes_data
 
         data = self.validate_game_data(data)
         self.track_no_detections(data)
