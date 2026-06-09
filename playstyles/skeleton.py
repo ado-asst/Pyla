@@ -40,6 +40,9 @@ current_brawler: Optional[str] = None
 walls: List[List[float]] =[]
 """List of bounding boxes for walls: [[x1, y1, x2, y2], ...]."""
 
+bushes: List[List[float]] = []
+"""List of bounding boxes for bushes: [[x1, y1, x2, y2], ...]."""
+
 brawlers_info: Dict[str, Any] = {}
 """Dictionary containing parsed info from brawlers_info.json/toml."""
 
