@@ -74,7 +74,7 @@ def discover_device(verbose: bool = False) -> AdbDevice:
         raise ConnectionError("No ADB devices came online after scan.")
 
     if preferred_port:
-        pref = next((d for d in devices if d.serial.endswith(f":{preferred_port}")), None)
+        pref = next((d for d in devices if d.serial.endswith(f"{preferred_port}")), None)
         if pref:
             if verbose and len(devices) > 1:
                 print(f"Multiple devices online; using configured port {preferred_port} ({pref.serial})")
