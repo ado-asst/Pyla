@@ -287,11 +287,12 @@ class ScrcpyClient:
                 creationflags = subprocess.CREATE_NO_WINDOW
             except AttributeError:
                 creationflags = 0
+        # Capturamos stderr para ver el error real del server si crashea
         try:
             self._server_proc = subprocess.Popen(
                 full_cmd,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
                 creationflags=creationflags,
             )
         except FileNotFoundError:
@@ -300,11 +301,33 @@ class ScrcpyClient:
             self._server_proc = subprocess.Popen(
                 shell_cmd,
                 shell=True,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
                 creationflags=creationflags,
             )
         print(f"[scrcpy_native] Server process started (pid={self._server_proc.pid}).")
+
+        # Lanzamos un hilo para ir vaciando el stdout/stderr del server
+        # y mostrarlo (solo las primeras lineas, para debug)
+        def _drain_server_output():
+            try:
+                count = 0
+                for line in iter(self._server_proc.stdout.readline, b''):
+                    if not line:
+                        break
+                    try:
+                        text = line.decode("utf-8", errors="replace").rstrip()
+                    except Exception:
+                        text = repr(line)
+                    if text:
+                        print(f"[scrcpy_native:server] {text}")
+                        count += 1
+                        if count >= 20:
+                            break
+            except Exception as e:
+                print(f"[scrcpy_native] drain error: {e}")
+        t = threading.Thread(target=_drain_server_output, daemon=True, name="scrcpy-server-out")
+        t.start()
 
     def _setup_forward(self) -> None:
         """Forward PC port 27183 -> device localabstract:scrcpy."""
