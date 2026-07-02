@@ -461,21 +461,60 @@ class ScrcpyClient:
             f"Resolution: {self.width}x{self.height}"
         )
 
-    def _connect_control_socket(self, timeout_s: int = 10) -> None:
-        """Connect control socket (second connection to same forwarded port)."""
+    def _connect_control_socket(self, timeout_s: int = 15) -> None:
+        """
+        Connect control socket (second connection to same forwarded port).
+
+        scrcpy server expects: 1st connection = video, 2nd connection = control.
+        We add a delay after video socket to let the server be ready to accept
+        the second connection.
+        """
+        # Delay para dar tiempo al server a estar listo para la 2da conexion
+        time.sleep(1.0)
+
         deadline = time.time() + timeout_s
+        attempt = 0
+        last_err = None
         while time.time() < deadline and not self._stop_event.is_set():
+            attempt += 1
             try:
-                s = socket.create_connection(("127.0.0.1", LOCAL_PORT), timeout=2)
+                s = socket.create_connection(("127.0.0.1", LOCAL_PORT), timeout=3)
                 s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+                s.settimeout(2.0)
+                # Verificar que el socket no se cierra inmediatamente
+                # (si el server rechazo la conexion, recv devuelve 0)
+                try:
+                    s.setblocking(False)
+                    time.sleep(0.1)
+                    try:
+                        peek = s.recv(1, socket.MSG_PEEK)
+                        if peek == b'':
+                            # EOF - server cerro la conexion
+                            s.close()
+                            time.sleep(0.3)
+                            continue
+                    except BlockingIOError:
+                        # No data disponible = socket vivo y esperando (esto es bueno)
+                        pass
+                    except Exception:
+                        # Otro error - probablemente socket vivo
+                        pass
+                    s.setblocking(True)
+                    s.settimeout(2.0)
+                except Exception:
+                    pass
                 self.control_socket = s
                 self.control = _ControlProtocol(s, self.width, self.height)
-                print(f"[scrcpy_native] Control socket connected.")
+                print(
+                    f"[scrcpy_native] Control socket connected (attempt {attempt})."
+                )
                 return
-            except Exception:
-                time.sleep(0.2)
+            except Exception as e:
+                last_err = e
+                time.sleep(0.3)
         raise ConnectionError(
-            f"Failed to connect control socket after {timeout_s}s."
+            f"Failed to connect control socket after {timeout}s "
+            f"({attempt} attempts). Last error: {last_err}"
         )
 
     # === Decode loop ===
@@ -539,6 +578,14 @@ class ScrcpyClient:
         self.alive = False
 
     # === Public API ===
+    def is_alive(self) -> bool:
+        """Check if the client is alive (video + control sockets connected)."""
+        return self.alive and self.video_socket is not None and self.control is not None
+
+    def is_control_alive(self) -> bool:
+        """Check if the control socket is alive."""
+        return self.control is not None and not self.control._closed
+
     def start(self, threaded: bool = False, daemon_threaded: bool = False) -> None:
         """Start the scrcpy client. Always runs the decode loop in a daemon thread."""
         try:

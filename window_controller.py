@@ -488,35 +488,55 @@ class WindowController:
         return frame
 
     def touch_down(self, x, y, pointer_id=0):
+        # Verificar si el control socket esta vivo antes de intentar
+        if not getattr(self.scrcpy_client, 'is_control_alive', lambda: False)():
+            print(f"[wireless] Control socket no disponible. Triggering reconnect...")
+            if not self.reconnect_scrcpy():
+                print(f"[wireless] Reconnect failed. Touch_down at ({x}, {y}) abandoned.")
+                return
         try:
             self.scrcpy_client.control.touch(int(x), int(y), scrcpy.ACTION_DOWN, pointer_id)
         except Exception as e:
             print(f"Error during touch_down at ({x}, {y}) with pointer_id {pointer_id}: {e}")
             if self.reconnect_scrcpy() :
                 try:
-                    self.scrcpy_client.control.touch(int(x), int(y), scrcpy.ACTION_DOWN, pointer_id)
+                    if self.scrcpy_client.control is not None:
+                        self.scrcpy_client.control.touch(int(x), int(y), scrcpy.ACTION_DOWN, pointer_id)
+                    else:
+                        print(f"Retry after reconnect failed: control is still None.")
                 except Exception as e2:
                     print(f"Retry after reconnect failed during touch_down at ({x}, {y}) with pointer_id {pointer_id}: {e2}")
 
     def touch_move(self, x, y, pointer_id=0):
+        if not getattr(self.scrcpy_client, 'is_control_alive', lambda: False)():
+            # No imprimimos en move porque se llama muy frecuentemente
+            return
         try:
             self.scrcpy_client.control.touch(int(x), int(y), scrcpy.ACTION_MOVE, pointer_id)
         except Exception as e:
             print(f"Error during touch_move at ({x}, {y}) with pointer_id {pointer_id}: {e}")
             if self.reconnect_scrcpy():
                 try:
-                    self.scrcpy_client.control.touch(int(x), int(y), scrcpy.ACTION_MOVE, pointer_id)
+                    if self.scrcpy_client.control is not None:
+                        self.scrcpy_client.control.touch(int(x), int(y), scrcpy.ACTION_MOVE, pointer_id)
+                    else:
+                        print(f"Retry after reconnect failed: control is still None.")
                 except Exception as e2:
                     print(f"Retry after reconnect failed during touch_move at ({x}, {y}) with pointer_id {pointer_id}: {e2}")
 
     def touch_up(self, x, y, pointer_id=0):
+        if not getattr(self.scrcpy_client, 'is_control_alive', lambda: False)():
+            return
         try:
             self.scrcpy_client.control.touch(int(x), int(y), scrcpy.ACTION_UP, pointer_id)
         except Exception as e:
             print(f"Error during touch_up at ({x}, {y}) with pointer_id {pointer_id}: {e}")
             if self.reconnect_scrcpy():
                 try:
-                    self.scrcpy_client.control.touch(int(x), int(y), scrcpy.ACTION_UP, pointer_id)
+                    if self.scrcpy_client.control is not None:
+                        self.scrcpy_client.control.touch(int(x), int(y), scrcpy.ACTION_UP, pointer_id)
+                    else:
+                        print(f"Retry after reconnect failed: control is still None.")
                 except Exception as e2:
                     print(f"Retry after reconnect failed during touch_up at ({x}, {y}) with pointer_id {pointer_id}: {e2}")
 
