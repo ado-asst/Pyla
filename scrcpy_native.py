@@ -396,31 +396,55 @@ class ScrcpyClient:
         )
 
     def _read_initial_metadata(self) -> None:
-        """Read dummy byte, device name (64 bytes), and resolution (4 bytes)."""
-        # El primer byte ya se leyo en _connect_video_socket para verificar que
-        # el server estaba vivo. Lo usamos aqui.
-        dummy = getattr(self, "_first_byte", None) or b"\x00"
-        if not dummy:
-            raise ConnectionError(f"Did not receive Dummy Byte! Got: {dummy!r}")
+        """
+        Read initial metadata from server.
 
-        # Si el primer byte NO es 0x00, entonces el server probablemente esta
-        # enviando device name primero (send_device_meta=true en v1.25).
-        # En ese caso, tratar el byte como primer byte del device name.
-        if dummy == b"\x00":
-            # Dummy byte recibido, ahora leer device name (64 bytes)
-            name_bytes = _recv_exactly(self.video_socket, 64, self._stop_event)
-            self.device_name = name_bytes.decode("utf-8", errors="ignore").rstrip("\x00")
-            # Y luego resolution (4 bytes)
-            res_bytes = _recv_exactly(self.video_socket, 4, self._stop_event)
-            self.width, self.height = struct.unpack(">HH", res_bytes)
-        else:
-            # El primer byte es parte del device name. Leer 63 bytes mas.
-            rest_name = _recv_exactly(self.video_socket, 63, self._stop_event)
-            name_bytes = dummy + rest_name
-            self.device_name = name_bytes.decode("utf-8", errors="ignore").rstrip("\x00")
-            # Y luego resolution (4 bytes)
-            res_bytes = _recv_exactly(self.video_socket, 4, self._stop_event)
-            self.width, self.height = struct.unpack(">HH", res_bytes)
+        scrcpy v1.25 con send_frame_meta=false SOLO manda el dummy byte (0x00).
+        No manda device name ni resolution por el socket - va directo al stream H.264.
+        Asi que obtenemos device name y resolution via adb shell en su lugar.
+        """
+        # El primer byte (dummy 0x00) ya se leyo en _connect_video_socket
+        # No hay mas metadata que leer del socket con estos args.
+
+        # Obtener device name via adb shell
+        try:
+            name_out = self.device.shell("getprop ro.product.model").strip()
+            self.device_name = name_out or "android"
+        except Exception:
+            self.device_name = "android"
+
+        # Obtener resolucion via adb shell wm size
+        # Salida tipica: "Physical size: 1080x2400" o "Override size: 1024x464"
+        try:
+            size_out = self.device.shell("wm size").strip()
+            # Parsear la ultima linea que tenga formato WxH
+            parsed = None
+            for line in size_out.splitlines():
+                line = line.strip()
+                if "x" in line.lower():
+                    # Tomar override size si existe (refleja la rotacion actual)
+                    parts = line.split(":", 1)
+                    if len(parts) == 2:
+                        size_str = parts[1].strip()
+                    else:
+                        size_str = line
+                    try:
+                        w_h = size_str.lower().split("x")
+                        if len(w_h) == 2:
+                            parsed = (int(w_h[0]), int(w_h[1]))
+                    except Exception:
+                        continue
+            if parsed:
+                self.width, self.height = parsed
+            else:
+                # Fallback: usar max_width como ancho y asumir 16:9
+                self.width = self.max_width
+                self.height = int(self.max_width * 9 / 16)
+        except Exception as e:
+            print(f"[scrcpy_native] Warning: no se pudo obtener wm size: {e}")
+            # Fallback conservador
+            self.width = self.max_width
+            self.height = int(self.max_width * 9 / 16)
 
         print(
             f"[scrcpy_native] Device: {self.device_name!r}, "
