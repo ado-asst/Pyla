@@ -261,17 +261,18 @@ class ScrcpyClient:
 
     def _start_server(self) -> None:
         """Start scrcpy server on device via `adb shell` (background process)."""
+        # Argumentos para scrcpy-server v1.25 (sin underscore en bit_rate, log_level en vez de log)
         args = [
-            f"log=info",
             f"max_size={self.max_width}",
             f"max_fps={self.max_fps}",
-            f"video_bit_rate={self.bitrate}",
+            f"bit_rate={self.bitrate}",  # v1.25: bit_rate, no video_bit_rate
             "tunnel_forward=true",
             "send_frame_meta=false",
             f"stay_awake={str(self.stayAwake).lower()}",
             "power_off_on_close=false",
             f"lock_video_orientation={self.lock_screen_orientation}",
             "clipboard_autosync=false",
+            "log_level=warn",  # v1.25: log_level, no log. warn para no tener demasiado output
         ]
         cmd = (
             f"CLASSPATH={SERVER_JAR_REMOTE} "
