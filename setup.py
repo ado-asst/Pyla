@@ -116,8 +116,8 @@ install_requires = [
     "packaging>=25.0",
     "pywin32>=311",
     "easyocr~=1.7",
-    "adbutils~=2.12",
-    "av~=12.3",
+    "adbutils>=1.0.8,<3.0.0",
+    "av~=17.1",
     "Flask~=3.1",
     "pycryptodome~=3.21",
     "pandas~=3.0",
@@ -194,7 +194,7 @@ if any(cmd in sys.argv for cmd in ["install", "develop"]):
             installed_onnx = "ONNX Runtime (DirectML)"
 
         # Conflict Resolution
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "adbutils==2.12.0", "av==12.3.0"])
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "adbutils>=1.0.8,<3.0.0", "av~=17.1"])
         subprocess.check_call([
             sys.executable, "-m", "pip", "install",
             "--force-reinstall", "--no-deps",

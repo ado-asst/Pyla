@@ -4,7 +4,11 @@ from concurrent.futures import ThreadPoolExecutor
 import threading
 import time
 
-import scrcpy
+# === Plan A: usar scrcpy_native (cliente minimalista propio) en lugar de scrcpy-client 0.4.7 ===
+# scrcpy-client 0.4.7 falla al conectar el socket localabstract en algunos moviles fisicos
+# (Samsung S21 FE Android 13, etc.). scrcpy_native usa el mismo scrcpy-server v1.25 pero con
+# una implementacion de cliente mas robusta (adb forward + PyAV decoder directo).
+import scrcpy_native as scrcpy
 from adbutils import adb, AdbDevice
 from debug_view import DebugViewPublisher
 from utils import config_bool, load_toml_as_dict, save_dict_as_toml, invalidate_toml_cache
@@ -43,13 +47,13 @@ def _scrcpy_options_from_config() -> dict:
     }
 
 
-def _create_scrcpy_client(device, max_ips="auto") -> "scrcpy.Client":
+def _create_scrcpy_client(device, max_ips="auto") -> "scrcpy.ScrcpyClient":
     """
     Crea un cliente scrcpy con opciones optimizadas para el dispositivo.
     - max_ips puede ser "auto" (sin limite de FPS) o un entero (FPS maximo).
     - Usa stay_awake=True para evitar que el movil se duerma.
-    - Fuerza orientacion landscape (lock_video_orientation=1) para Brawl Stars.
     - max_width=1920 para limitar ancho de banda en moviles 2K/4K.
+    - Plan A: usa scrcpy_native.ScrcpyClient (no scrcpy.Client).
     """
     opts = _scrcpy_options_from_config()
     common_kwargs = dict(
@@ -59,18 +63,18 @@ def _create_scrcpy_client(device, max_ips="auto") -> "scrcpy.Client":
         stay_awake=opts["stay_awake"],
         lock_screen_orientation=opts["lock_video_orientation"],
     )
-    if max_ips == "auto" or not max_ips:
-        return scrcpy.Client(**common_kwargs)
-    try:
-        fps = int(max_ips)
-        if fps > 0:
-            common_kwargs["max_fps"] = fps
-    except (TypeError, ValueError):
-        pass
-    # Si el config tiene scrcpy_max_fps y no se paso max_ips especifico, lo usamos
-    if "max_fps" not in common_kwargs and opts["max_fps"] > 0:
-        common_kwargs["max_fps"] = opts["max_fps"]
-    return scrcpy.Client(**common_kwargs)
+    # max_fps: prioriza argumento explicito, luego config
+    fps_to_use = None
+    if max_ips not in ("auto", None):
+        try:
+            fps_to_use = int(max_ips)
+        except (TypeError, ValueError):
+            fps_to_use = None
+    if (fps_to_use is None or fps_to_use <= 0) and opts["max_fps"] > 0:
+        fps_to_use = opts["max_fps"]
+    if fps_to_use is not None and fps_to_use > 0:
+        common_kwargs["max_fps"] = fps_to_use
+    return scrcpy.ScrcpyClient(**common_kwargs)
 
 
 def _unlock_device(device) -> None:
@@ -158,7 +162,14 @@ def _connect_remote_device(address: str, verbose: bool = False):
     import time as _t
     for attempt in range(3):
         try:
-            dev = adb.connect(address_full, timeout=10)
+            _r = adb.connect(address_full, timeout=10)
+            # adbutils 1.x devuelve un mensaje tipo 'connected to IP:PORT' (str);
+            # adbutils 2.x devuelve un AdbDevice directamente.
+            if isinstance(_r, str):
+                # El serial de un dispositivo remoto es exactamente IP:PORT
+                dev = adb.device(serial=address_full)
+            else:
+                dev = _r
             if verbose:
                 print(f"[wireless] Conectado a {address_full} -> {dev.serial}")
             # Verifica que esté realmente online (no offline/unauthorized)

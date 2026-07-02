@@ -25,8 +25,10 @@ device_address = ""
 # === Scrcpy (captura de pantalla + inputs) ===
 # Estas opciones se aplican tanto a emuladores como a moviles fisicos.
 # Para movil fisico por ADB inalambrico los valores por defecto ya son buenos.
-scrcpy_max_width = 1920        # ancho maximo del frame. 1920 para 1080p. Reduce si hay lag.
-scrcpy_bitrate = 4000000       # 4 Mbps. Sube a 8000000 para mas calidad, baja si hay lag.
-scrcpy_max_fps = 0             # 0 = sin limite. Pon 30 o 60 si quieres limitar.
+# NOTA: PylaAI ahora usa un cliente scrcpy minimalista propio (scrcpy_native.py)
+# compatible con scrcpy-server v1.25, en lugar del paquete scrcpy-client 0.4.7.
+scrcpy_max_width = 1024        # ancho maximo del frame. 1920 para 1080p. 1024 recomendado para WiFi.
+scrcpy_bitrate = 1500000       # 1.5 Mbps. Conservador para WiFi. Sube a 4000000 si tu WiFi es rapido.
+scrcpy_max_fps = 30            # 0 = sin limite. 30 recomendado para estabilidad.
 scrcpy_stay_awake = true       # mantiene el movil despierto (no se apaga la pantalla)
-scrcpy_lock_video_orientation = 1  # 0=auto, 1=landscape, 2=portrait. Brawl Stars = landscape (1).
+scrcpy_lock_video_orientation = 0  # 0=unlocked (deja que el bot fuerce landscape via settings). 1=landscape forzado por scrcpy.
