@@ -224,6 +224,7 @@ class ScrcpyClient:
         self.width: int = 0
         self.height: int = 0
         self.device_name: str = ""
+        self._first_byte: Optional[bytes] = None
 
         self._listeners = {EVENT_FRAME: [], EVENT_INIT: []}
         self._frame_thread: Optional[threading.Thread] = None
@@ -345,41 +346,81 @@ class ScrcpyClient:
 
     # === Socket connection ===
     def _connect_video_socket(self, timeout_s: int = 30) -> None:
-        """Connect to the video socket (PC port 27183)."""
+        """
+        Connect to the video socket (PC port 27183) AND verify server is ready
+        by reading the first byte (dummy byte or first byte of device name).
+
+        With adb forward, the TCP connection succeeds immediately even if the
+        server isn't running yet (adb buffers it). So we need to actually try
+        reading a byte to confirm the server is alive. If recv returns 0 (EOF),
+        the server isn't ready yet — close and retry.
+        """
         deadline = time.time() + timeout_s
         last_err = None
+        attempt = 0
+        # Pequeno delay inicial para dar tiempo al server a arrancar
+        time.sleep(0.5)
         while time.time() < deadline and not self._stop_event.is_set():
+            attempt += 1
             try:
                 s = socket.create_connection(("127.0.0.1", LOCAL_PORT), timeout=2)
                 s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-                s.settimeout(1.0)  # non-blocking-ish for stop event responsiveness
+                s.settimeout(2.0)
+                # Intentar leer 1 byte para verificar que el server responde
+                try:
+                    first_byte = s.recv(1)
+                except socket.timeout:
+                    # No data yet pero socket vivo - server probablemente no listo
+                    s.close()
+                    time.sleep(0.3)
+                    continue
+                if not first_byte:
+                    # EOF: server no esta corriendo o cerro la conexion
+                    s.close()
+                    time.sleep(0.3)
+                    continue
+                # Got a byte! Server is alive. Store it for later reading.
                 self.video_socket = s
-                print(f"[scrcpy_native] Video socket connected.")
+                self._first_byte = first_byte  # se usara en _read_initial_metadata
+                print(
+                    f"[scrcpy_native] Video socket connected and server is alive "
+                    f"(attempt {attempt}, first byte: {first_byte!r})."
+                )
                 return
             except Exception as e:
                 last_err = e
-                time.sleep(0.2)
+                time.sleep(0.3)
         raise ConnectionError(
-            f"Failed to connect scrcpy video socket after {timeout_s}s. "
-            f"Last error: {last_err}"
+            f"Failed to connect scrcpy video socket after {timeout}s "
+            f"({attempt} attempts). Last error: {last_err}"
         )
 
     def _read_initial_metadata(self) -> None:
         """Read dummy byte, device name (64 bytes), and resolution (4 bytes)."""
-        # Dummy byte (must be 0x00)
-        dummy = _recv_exactly(self.video_socket, 1, self._stop_event)
-        if not dummy or dummy != b"\x00":
-            raise ConnectionError(
-                f"Did not receive valid Dummy Byte! Got: {dummy!r}"
-            )
+        # El primer byte ya se leyo en _connect_video_socket para verificar que
+        # el server estaba vivo. Lo usamos aqui.
+        dummy = getattr(self, "_first_byte", None) or b"\x00"
+        if not dummy:
+            raise ConnectionError(f"Did not receive Dummy Byte! Got: {dummy!r}")
 
-        # Device name (64 bytes, null-padded UTF-8)
-        name_bytes = _recv_exactly(self.video_socket, 64, self._stop_event)
-        self.device_name = name_bytes.decode("utf-8", errors="ignore").rstrip("\x00")
-
-        # Resolution (4 bytes: width uint16 BE + height uint16 BE)
-        res_bytes = _recv_exactly(self.video_socket, 4, self._stop_event)
-        self.width, self.height = struct.unpack(">HH", res_bytes)
+        # Si el primer byte NO es 0x00, entonces el server probablemente esta
+        # enviando device name primero (send_device_meta=true en v1.25).
+        # En ese caso, tratar el byte como primer byte del device name.
+        if dummy == b"\x00":
+            # Dummy byte recibido, ahora leer device name (64 bytes)
+            name_bytes = _recv_exactly(self.video_socket, 64, self._stop_event)
+            self.device_name = name_bytes.decode("utf-8", errors="ignore").rstrip("\x00")
+            # Y luego resolution (4 bytes)
+            res_bytes = _recv_exactly(self.video_socket, 4, self._stop_event)
+            self.width, self.height = struct.unpack(">HH", res_bytes)
+        else:
+            # El primer byte es parte del device name. Leer 63 bytes mas.
+            rest_name = _recv_exactly(self.video_socket, 63, self._stop_event)
+            name_bytes = dummy + rest_name
+            self.device_name = name_bytes.decode("utf-8", errors="ignore").rstrip("\x00")
+            # Y luego resolution (4 bytes)
+            res_bytes = _recv_exactly(self.video_socket, 4, self._stop_event)
+            self.width, self.height = struct.unpack(">HH", res_bytes)
 
         print(
             f"[scrcpy_native] Device: {self.device_name!r}, "
