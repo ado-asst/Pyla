@@ -70,13 +70,34 @@ RECV_CHUNK = 65536
 
 def _find_adb_path() -> str:
     """Locate the adb executable, preferring adbutils' bundled one."""
+    # 1) Intenta via adbutils (mas confiable)
     try:
         from adbutils._utils import get_adb_path
-        return get_adb_path()
+        p = get_adb_path()
+        if p and os.path.exists(p):
+            return p
     except Exception:
         pass
-    # Fall back to PATH lookup
-    return "adb"
+    # 2) Busca en PATH con extension .exe en Windows
+    import shutil
+    exe_name = "adb.exe" if os.name == "nt" else "adb"
+    found = shutil.which("adb") or shutil.which(exe_name)
+    if found:
+        return found
+    # 3) Busca en ubicaciones comunes de Windows
+    if os.name == "nt":
+        candidate_paths = [
+            os.path.join(os.environ.get("LOCALAPPDATA", ""), "Android", "Sdk", "platform-tools", "adb.exe"),
+            os.path.join(os.environ.get("USERPROFILE", ""), "AppData", "Local", "Android", "Sdk", "platform-tools", "adb.exe"),
+            r"C:\Android\platform-tools\adb.exe",
+            r"C:\Program Files\Android\Android Studio\bin\adb.exe",
+            r"C:\Program Files (x86)\Android\android-sdk\platform-tools\adb.exe",
+        ]
+        for c in candidate_paths:
+            if c and os.path.exists(c):
+                return c
+    # 4) Ultimo recurso: el nombre solo (puede fallar en Windows)
+    return exe_name
 
 
 def _recv_exactly(sock: socket.socket, n: int, stop_event: threading.Event) -> bytes:
@@ -266,12 +287,23 @@ class ScrcpyClient:
                 creationflags = subprocess.CREATE_NO_WINDOW
             except AttributeError:
                 creationflags = 0
-        self._server_proc = subprocess.Popen(
-            full_cmd,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            creationflags=creationflags,
-        )
+        try:
+            self._server_proc = subprocess.Popen(
+                full_cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                creationflags=creationflags,
+            )
+        except FileNotFoundError:
+            # Fallback: usar shell=True con la cadena completa
+            shell_cmd = f'"{adb_path}" -s {self.device.serial} shell "{cmd}"'
+            self._server_proc = subprocess.Popen(
+                shell_cmd,
+                shell=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                creationflags=creationflags,
+            )
         print(f"[scrcpy_native] Server process started (pid={self._server_proc.pid}).")
 
     def _setup_forward(self) -> None:
