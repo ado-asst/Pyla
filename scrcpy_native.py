@@ -190,7 +190,7 @@ class ScrcpyClient:
         self.max_width = int(max_width)
         self.bitrate = int(bitrate)
         self.max_fps = int(max_fps)
-        self.stayAwake = bool(stayAwake)
+        self.stayAwake = bool(stay_awake)
         self.lock_screen_orientation = int(lock_screen_orientation)
         # Aliases for scrcpy-client compatibility
         self.stay_awake = self.stayAwake
