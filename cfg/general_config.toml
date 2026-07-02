@@ -31,4 +31,4 @@ scrcpy_max_width = 1024        # ancho maximo del frame. 1920 para 1080p. 1024 r
 scrcpy_bitrate = 1500000       # 1.5 Mbps. Conservador para WiFi. Sube a 4000000 si tu WiFi es rapido.
 scrcpy_max_fps = 30            # 0 = sin limite. 30 recomendado para estabilidad.
 scrcpy_stay_awake = true       # mantiene el movil despierto (no se apaga la pantalla)
-scrcpy_lock_video_orientation = 0  # 0=unlocked (deja que el bot fuerce landscape via settings). 1=landscape forzado por scrcpy.
+scrcpy_lock_video_orientation = 1  # 0=unlocked, 1=landscape forzado por scrcpy, 2=portrait. Recomendado: 1 para Brawl Stars.

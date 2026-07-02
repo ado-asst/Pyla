@@ -38,9 +38,9 @@ def _scrcpy_options_from_config() -> dict:
     """
     cfg = load_toml_as_dict("cfg/general_config.toml")
     return {
-        "max_width": int(cfg.get("scrcpy_max_width", 1920)),
-        "bitrate": int(cfg.get("scrcpy_bitrate", 4000000)),
-        "max_fps": int(cfg.get("scrcpy_max_fps", 0)),
+        "max_width": int(cfg.get("scrcpy_max_width", 1024)),
+        "bitrate": int(cfg.get("scrcpy_bitrate", 1500000)),
+        "max_fps": int(cfg.get("scrcpy_max_fps", 30)),
         "stay_awake": config_bool(cfg.get("scrcpy_stay_awake", True), True),
         # 0=unlocked, 1=landscape, 2=portrait. Por defecto landscape (1) para Brawl Stars.
         "lock_video_orientation": int(cfg.get("scrcpy_lock_video_orientation", 1)),
@@ -95,9 +95,12 @@ def _unlock_device(device) -> None:
 
 def _force_landscape(device) -> None:
     """
-    Fuerza orientacion landscape en el dispositivo via `settings` y `wm`.
-    - settings put system user_rotation 1 -> 1 = landscape (rotado 90 grados)
-    - settings put system accelerometer_rotation 0 -> desactiva auto-rotacion
+    Fuerza orientacion landscape en el dispositivo.
+    Estrategia:
+    1) settings put system accelerometer_rotation 0 (desactiva auto-rotacion)
+    2) settings put system user_rotation 1 (fuerza rotacion landscape = 90 grados)
+    3) Si la resolucion sigue en portrait, avisa al usuario (el lock_video_orientation
+       del scrcpy server se encargara de entregar el frame rotado al bot).
     """
     try:
         # Desactiva auto-rotacion
@@ -105,7 +108,33 @@ def _force_landscape(device) -> None:
         time.sleep(0.2)
         # Fuerza rotacion landscape (1 = 90 grados, landscape)
         device.shell("settings put system user_rotation 1")
-        time.sleep(0.3)
+        time.sleep(0.5)
+
+        # Verifica la resolucion actual
+        size_out = device.shell("wm size").strip()
+        # Ultima linea tipo "Override size: 464x1024" o "Physical size: 1080x2400"
+        current_w, current_h = None, None
+        for line in size_out.splitlines():
+            line = line.strip()
+            if "x" in line.lower() and ":" in line:
+                try:
+                    size_str = line.split(":", 1)[1].strip()
+                    w_h = size_str.lower().split("x")
+                    if len(w_h) == 2:
+                        current_w, current_h = int(w_h[0]), int(w_h[1])
+                except Exception:
+                    continue
+
+        if current_w and current_h:
+            if current_h > current_w:
+                print(
+                    f"[wireless] Movil sigue en portrait ({current_w}x{current_h}). "
+                    f"El scrcpy server rotara el frame automaticamente via "
+                    f"lock_video_orientation=1. Asegurate de que Brawl Stars este "
+                    f"abierto en horizontal."
+                )
+            else:
+                print(f"[wireless] Orientacion landscape OK: {current_w}x{current_h}")
     except Exception as e:
         print(f"[wireless] No se pudo forzar orientacion landscape: {e}")
 

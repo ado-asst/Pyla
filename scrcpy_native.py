@@ -143,23 +143,31 @@ class _ControlProtocol:
 
         action: ACTION_DOWN, ACTION_UP, or ACTION_MOVE
         pointer_id: unique per "finger". Use different IDs for simultaneous touches.
-        pressure: 0.0 (released) to 1.0 (max). 0xFFFF in scrcpy 1.x uint16 format.
+        pressure: 0.0 (released) to 1.0 (max). 0xFFFF in scrcpy uint16 format.
+
+        scrcpy v1.25 INJECT_TOUCH_EVENT message format (26 bytes total):
+            byte 0:      type (uint8)  = TYPE_INJECT_TOUCH_EVENT (0)
+            byte 1:      action (uint8) = ACTION_DOWN/UP/MOVE
+            bytes 2-9:   pointer_id (uint64 BE)
+            bytes 10-13: x (int32 BE, signed)
+            bytes 14-17: y (int32 BE, signed)
+            bytes 18-19: screen_width (uint16 BE)
+            bytes 20-21: screen_height (uint16 BE)
+            bytes 22-23: pressure (uint16 BE, 0xFFFF = max)
+            bytes 24-25: action_button (uint16 BE, 0 for touch)
+            bytes 26-27: buttons (uint16 BE, 0 for touch)
+
+        Note: scrcpy v1.x sin action_button/buttons = 24 bytes.
+              v1.25+ = 28 bytes (con action_button + buttons al final).
         """
         if self._closed:
             raise ConnectionError("control socket already closed")
 
-        # scrcpy 1.x INJECT_TOUCH_EVENT message format (24 bytes total):
-        #   byte 0:     type (uint8)  = TYPE_INJECT_TOUCH_EVENT (0)
-        #   byte 1:     action (uint8) = ACTION_DOWN/UP/MOVE
-        #   bytes 2-9:  pointer_id (uint64 BE)
-        #   bytes 10-13: x (int32 BE, signed)
-        #   bytes 14-17: y (int32 BE, signed)
-        #   bytes 18-19: screen_width (uint16 BE)
-        #   bytes 20-21: screen_height (uint16 BE)
-        #   bytes 22-23: pressure (uint16 BE, 0xFFFF = max)
         pressure_uint16 = 0xFFFF if pressure > 0.0 else 0
+        # Formato v1.25+: 28 bytes con action_button y buttons al final
+        # action_button=0 (primary), buttons=0 (no buttons pressed)
         msg = struct.pack(
-            ">BBQiiHHH",
+            ">BBQiiHHHHH",
             TYPE_INJECT_TOUCH_EVENT,
             action,
             int(pointer_id) & 0xFFFFFFFFFFFFFFFF,
@@ -168,6 +176,8 @@ class _ControlProtocol:
             int(self.width),
             int(self.height),
             pressure_uint16,
+            0,  # action_button (no buttons)
+            0,  # buttons (no buttons)
         )
         with self._lock:
             try:
