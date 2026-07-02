@@ -123,11 +123,56 @@ ADB y comenzará a jugar. Verás en la consola algo como:
 [wireless] Conectado a 192.168.1.50:5555 -> 192.168.1.50:5555
 [wireless] Dispositivo listo: 192.168.1.50:5555
 Connected to device: 192.168.1.50:5555
+[wireless] Dispositivo remoto detectado (192.168.1.50:5555).
+[wireless] Despertando y forzando orientacion landscape...
+Scrcpy client started successfully.
 ```
 
 ---
 
-## 7. Scripts disponibles (carpeta del proyecto)
+## 7. Resolución, orientación y rendimiento
+
+El bot fue diseñado para 1920x1080 (emulador landscape). En un móvil físico,
+estos son los puntos clave que PylaAI **gestiona automáticamente por ti**:
+
+### Orientación landscape (forzada)
+- El bot envía comandos ADB para:
+  - `settings put system accelerometer_rotation 0` → desactiva auto-rotación
+  - `settings put system user_rotation 1` → fuerza landscape (90°)
+- Además, scrcpy recibe `lock_video_orientation=1` para que el stream de
+  video SIEMPRE llegue en landscape aunque gires el móvil.
+- Si quieres anular esto (no recomendado para Brawl Stars), edita
+  `cfg/general_config.toml` y pon `scrcpy_lock_video_orientation = 0`.
+
+### Mantener pantalla despierta
+- El bot activa `stay_awake=true` en scrcpy → el móvil no se apaga mientras
+  el bot está corriendo.
+- Además, al iniciar envía `KEYCODE_WAKEUP` y un swipe para desbloquear la
+  pantalla si estaba apagada.
+
+### Resolución distinta de 1920x1080
+- Si tu móvil tiene resolución nativa distinta (1080x2400, 1440x3200, etc.),
+  el bot escala automáticamente las coordenadas de los botones usando
+  `width_ratio` y `height_ratio`. **Debería funcionar correctamente**.
+- scrcpy limita el ancho del frame a `scrcpy_max_width = 1920` por defecto
+  para no saturar la CPU del PC con frames 4K.
+- Verás un aviso `WARNING: Unexpected resolution: 1080x2400...` — es solo
+  informativo, no es un error.
+
+### Ajustes de rendimiento (solo si hay lag)
+En `cfg/general_config.toml` puedes tunear scrcpy:
+
+```toml
+scrcpy_max_width = 1280        # reduce resolución del frame si tu PC va lento
+scrcpy_bitrate = 2000000       # 2 Mbps, reduce ancho de banda
+scrcpy_max_fps = 30            # limita a 30 FPS para reducir carga de CPU
+scrcpy_stay_awake = true       # mantener siempre true
+scrcpy_lock_video_orientation = 1  # siempre 1 (landscape) para Brawl Stars
+```
+
+---
+
+## 8. Scripts disponibles (carpeta del proyecto)
 
 | Script            | Función                                                      |
 |-------------------|--------------------------------------------------------------|
@@ -137,7 +182,7 @@ Connected to device: 192.168.1.50:5555
 
 ---
 
-## 8. Solución de problemas
+## 9. Solución de problemas
 
 ### El emparejamiento falla con "cannot connect"
 - Asegúrate de que **el móvil y el PC están en la misma red WiFi**.
@@ -176,9 +221,24 @@ Connected to device: 192.168.1.50:5555
 - En `cfg\debug_settings.toml` activa `verbose_debug = true` para más detalle.
 - Cierra otras apps que estén usando ADB al mismo tiempo.
 
+### Los botones no se presionan donde deberían (offset de coordenadas)
+- Esto suele pasar si Brawl Stars NO está en orientación landscape.
+- Verifica en el móvil que Brawl Stars esté en modo horizontal.
+- Comprueba que `cfg/general_config.toml` tenga
+  `scrcpy_lock_video_orientation = 1`.
+- Si tu móvil tiene notch/cámara perforada, Brawl Stars puede renderizar con
+  bandas negras — el bot escala por la resolución REAL del frame, no la
+  visible. Esto no debería causar problemas.
+
+### El bot dice que la pantalla está en portrait (1080x1920)
+- El bot fuerza landscape automáticamente, pero si tu versión de Android
+  bloquea el comando `settings put system user_rotation`, puede fallar.
+- Solución manual: en el móvil activa "Auto-rotación" y gira el móvil
+  físicamente a horizontal. El bot funcionará igual.
+
 ---
 
-## 9. Notas de seguridad
+## 10. Notas de seguridad
 
 - El emparejamiento ADB da acceso total al móvil desde el PC: cuando no lo
   uses, **desactiva "Depuración inalámbrica"** en el móvil.

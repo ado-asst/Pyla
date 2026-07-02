@@ -21,3 +21,12 @@ play_order = "in_order"
 #   2) adb_connect.bat IP PUERTO
 #   3) Pon aqui la IP:PUERTO y lanza main.py
 device_address = ""
+
+# === Scrcpy (captura de pantalla + inputs) ===
+# Estas opciones se aplican tanto a emuladores como a moviles fisicos.
+# Para movil fisico por ADB inalambrico los valores por defecto ya son buenos.
+scrcpy_max_width = 1920        # ancho maximo del frame. 1920 para 1080p. Reduce si hay lag.
+scrcpy_bitrate = 4000000       # 4 Mbps. Sube a 8000000 para mas calidad, baja si hay lag.
+scrcpy_max_fps = 0             # 0 = sin limite. Pon 30 o 60 si quieres limitar.
+scrcpy_stay_awake = true       # mantiene el movil despierto (no se apaga la pantalla)
+scrcpy_lock_video_orientation = 1  # 0=auto, 1=landscape, 2=portrait. Brawl Stars = landscape (1).

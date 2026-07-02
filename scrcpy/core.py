@@ -162,8 +162,9 @@ class Client:
             "control=true",
             "audio=false",
             "show_touches=false",
-            "stay_awake=false",
+            f"stay_awake={str(self.stay_awake).lower()}",
             "power_off_on_close=false",
+            f"lock_video_orientation={self.lock_screen_orientation}",
             "clipboard_autosync=false"
         ]
 

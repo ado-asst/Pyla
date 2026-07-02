@@ -23,6 +23,95 @@ press_coords_dict = {
 }
 KNOWN_BS_PACKAGES = ("com.supercell.brawlstars", "bsd.suitcase.release")
 
+import random as _random
+
+
+def _scrcpy_options_from_config() -> dict:
+    """
+    Lee opciones de scrcpy desde cfg/general_config.toml.
+    Devuelve un dict con: max_width, bitrate, max_fps, stay_awake, lock_video_orientation.
+    Por defecto optimizado para movil fisico por ADB inalambrico.
+    """
+    cfg = load_toml_as_dict("cfg/general_config.toml")
+    return {
+        "max_width": int(cfg.get("scrcpy_max_width", 1920)),
+        "bitrate": int(cfg.get("scrcpy_bitrate", 4000000)),
+        "max_fps": int(cfg.get("scrcpy_max_fps", 0)),
+        "stay_awake": config_bool(cfg.get("scrcpy_stay_awake", True), True),
+        # 0=unlocked, 1=landscape, 2=portrait. Por defecto landscape (1) para Brawl Stars.
+        "lock_video_orientation": int(cfg.get("scrcpy_lock_video_orientation", 1)),
+    }
+
+
+def _create_scrcpy_client(device, max_ips="auto") -> "scrcpy.Client":
+    """
+    Crea un cliente scrcpy con opciones optimizadas para el dispositivo.
+    - max_ips puede ser "auto" (sin limite de FPS) o un entero (FPS maximo).
+    - Usa stay_awake=True para evitar que el movil se duerma.
+    - Fuerza orientacion landscape (lock_video_orientation=1) para Brawl Stars.
+    - max_width=1920 para limitar ancho de banda en moviles 2K/4K.
+    """
+    opts = _scrcpy_options_from_config()
+    common_kwargs = dict(
+        device=device,
+        max_width=opts["max_width"],
+        bitrate=opts["bitrate"],
+        stay_awake=opts["stay_awake"],
+        lock_screen_orientation=opts["lock_video_orientation"],
+    )
+    if max_ips == "auto" or not max_ips:
+        return scrcpy.Client(**common_kwargs)
+    try:
+        fps = int(max_ips)
+        if fps > 0:
+            common_kwargs["max_fps"] = fps
+    except (TypeError, ValueError):
+        pass
+    # Si el config tiene scrcpy_max_fps y no se paso max_ips especifico, lo usamos
+    if "max_fps" not in common_kwargs and opts["max_fps"] > 0:
+        common_kwargs["max_fps"] = opts["max_fps"]
+    return scrcpy.Client(**common_kwargs)
+
+
+def _unlock_device(device) -> None:
+    """
+    Despierta y desbloquea el movil (si esta apagado/bloqueado).
+    Solo aplica a moviles fisicos; en emuladores no hace nada malo.
+    """
+    try:
+        # KEYCODE_WAKEUP = 224
+        device.shell("input keyevent 224")
+        time.sleep(0.5)
+        # Desliza hacia arriba para salir del bloqueo (si hay)
+        device.shell("input swipe 500 1500 500 300 200")
+        time.sleep(0.3)
+    except Exception as e:
+        print(f"[wireless] No se pudo despertar el dispositivo: {e}")
+
+
+def _force_landscape(device) -> None:
+    """
+    Fuerza orientacion landscape en el dispositivo via `settings` y `wm`.
+    - settings put system user_rotation 1 -> 1 = landscape (rotado 90 grados)
+    - settings put system accelerometer_rotation 0 -> desactiva auto-rotacion
+    """
+    try:
+        # Desactiva auto-rotacion
+        device.shell("settings put system accelerometer_rotation 0")
+        time.sleep(0.2)
+        # Fuerza rotacion landscape (1 = 90 grados, landscape)
+        device.shell("settings put system user_rotation 1")
+        time.sleep(0.3)
+    except Exception as e:
+        print(f"[wireless] No se pudo forzar orientacion landscape: {e}")
+
+
+def _is_remote_device(serial: str) -> bool:
+    """Devuelve True si el serial parece un dispositivo remoto (IP:PORT)."""
+    if not serial:
+        return False
+    return ":" in serial and any(c.isdigit() for c in serial.split(":")[0])
+
 
 def restart_adb_server() -> None:
     try:
@@ -173,7 +262,14 @@ class WindowController:
 
             self.frame_lock = threading.Lock()
             self.max_ips = max_ips
-            self.scrcpy_client = scrcpy.Client(device=self.device, max_width=0, bitrate=4000000) if self.max_ips == "auto" else scrcpy.Client(device=self.device, max_width=0, bitrate=4000000, max_fps=self.max_ips)
+            # Si es un dispositivo remoto (movil fisico por ADB inalambrico),
+            # despertarlo y forzar orientacion landscape antes de iniciar scrcpy.
+            if _is_remote_device(self.device.serial):
+                print(f"[wireless] Dispositivo remoto detectado ({self.device.serial}).")
+                print(f"[wireless] Despertando y forzando orientacion landscape...")
+                _unlock_device(self.device)
+                _force_landscape(self.device)
+            self.scrcpy_client = _create_scrcpy_client(self.device, self.max_ips)
             self.last_frame = None
             self.last_frame_time = 0.0
             self.last_joystick_pos = (None, None)
@@ -253,7 +349,11 @@ class WindowController:
                         self.last_frame_time = time.time()
 
             try:
-                self.scrcpy_client = scrcpy.Client(device=self.device, max_width=0, bitrate=4000000) if self.max_ips == "auto" else scrcpy.Client(device=self.device, max_width=0, bitrate=4000000, max_fps=self.max_ips)
+                # En reconexion tambien despertamos y forzamos landscape si es remoto
+                if _is_remote_device(self.device.serial):
+                    _unlock_device(self.device)
+                    _force_landscape(self.device)
+                self.scrcpy_client = _create_scrcpy_client(self.device, self.max_ips)
                 self.scrcpy_client.add_listener(scrcpy.EVENT_FRAME, on_frame)
                 self.scrcpy_client.start(threaded=True)
             except Exception as e:
@@ -325,7 +425,22 @@ class WindowController:
             self.width = frame.shape[1]
             self.height = frame.shape[0]
             if (self.width, self.height) != (brawl_stars_width, brawl_stars_height):
-                print(f"WARNING: Unexpected resolution: {self.width}x{self.height}. Expected {brawl_stars_width}x{brawl_stars_height}. Please set your emulator resolution to 1920x1080 for best results.")
+                remote_note = ""
+                if _is_remote_device(self.device.serial):
+                    remote_note = (
+                        "\n[wireless] Para movil fisico por ADB inalambrico:"
+                        "\n  - Asegurate de que Brawl Stars este en modo LANDSCAPE"
+                        " (giro automatico activado en el movil o forzado por el bot)."
+                        "\n  - La resolucion nativa del movil no es 1920x1080, pero el bot"
+                        " escala coordenadas automaticamente. Deberia funcionar igual."
+                        "\n  - Si el boton esta mal posicionado, revisa que Brawl Stars"
+                        " este en orientacion landscape (gira el movil)."
+                    )
+                print(
+                    f"WARNING: Unexpected resolution: {self.width}x{self.height}. "
+                    f"Expected {brawl_stars_width}x{brawl_stars_height}. "
+                    f"Coordinadas seran escaladas automaticamente.{remote_note}"
+                )
             self.width_ratio = self.width / brawl_stars_width
             self.height_ratio = self.height / brawl_stars_height
             self.joystick_x, self.joystick_y = 220 * self.width_ratio, 870 * self.height_ratio
