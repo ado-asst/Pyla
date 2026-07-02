@@ -11,3 +11,13 @@ player_tag = ""
 default_trophy_target = 1000
 auto_load_queue_on_startup = true
 play_order = "in_order"
+
+# === ADB Inalambrico (Android 11+) ===
+# IP (o IP:PUERTO) del dispositivo Android conectado por ADB inalambrico.
+# Vacio = usar emulador local (comportamiento original).
+# Ejemplo: "192.168.1.50" o "192.168.1.50:5555"
+# Pasos:
+#   1) adb_pair.bat IP PUERTO_PAREJA CODIGO_8
+#   2) adb_connect.bat IP PUERTO
+#   3) Pon aqui la IP:PUERTO y lanza main.py
+device_address = ""

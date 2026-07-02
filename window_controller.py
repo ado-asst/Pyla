@@ -49,8 +49,65 @@ def online_devices():
     return out
 
 
+def _connect_remote_device(address: str, verbose: bool = False):
+    """
+    Conecta a un dispositivo Android por ADB inalámbrico (Android 11+).
+    address puede ser 'IP' o 'IP:PUERTO'. Si no hay puerto, usa 5555.
+    Devuelve el AdbDevice o None si falla.
+    """
+    if ":" not in address:
+        address_full = f"{address}:5555"
+    else:
+        address_full = address
+    if verbose:
+        print(f"[wireless] Intentando adb connect {address_full} ...")
+    # Limpia conexiones previas a esa IP para evitar phantom devices
+    try:
+        adb.disconnect(address_full)
+    except Exception:
+        pass
+    import time as _t
+    for attempt in range(3):
+        try:
+            dev = adb.connect(address_full, timeout=10)
+            if verbose:
+                print(f"[wireless] Conectado a {address_full} -> {dev.serial}")
+            # Verifica que esté realmente online (no offline/unauthorized)
+            try:
+                state = dev.get_state() if hasattr(dev, "get_state") else dev.state
+            except Exception:
+                state = "device"
+            if state == "device":
+                return dev
+            if verbose:
+                print(f"[wireless] Estado: {state}. Esperando autorizacion en el movil...")
+            _t.sleep(2)
+        except Exception as e:
+            if verbose:
+                print(f"[wireless] Intento {attempt+1} fallo: {e}")
+            _t.sleep(1)
+    return None
+
+
 def discover_device(verbose: bool = False) -> AdbDevice:
-    preferred_port = load_toml_as_dict("cfg/general_config.toml")["emulator_port"]
+    cfg = load_toml_as_dict("cfg/general_config.toml")
+    preferred_port = cfg.get("emulator_port", 5037)
+    device_address = cfg.get("device_address", "")  # ej: "192.168.1.50:5555"
+
+    # === MODO ADB INALAMBRICO (Android 11+) ===
+    # Si el usuario configuro device_address, intentamos conectar a ese dispositivo.
+    if device_address and isinstance(device_address, str) and device_address.strip():
+        addr = device_address.strip()
+        # Si es IP publica/privada (no 127.x.x.x ni localhost), es un dispositivo remoto
+        if not addr.startswith("127.") and not addr.startswith("localhost"):
+            print(f"[wireless] Conectando a dispositivo ADB remoto: {addr}")
+            dev = _connect_remote_device(addr, verbose=verbose)
+            if dev is not None:
+                print(f"[wireless] Dispositivo listo: {dev.serial}")
+                return dev
+            print(f"[wireless] No se pudo conectar a {addr}. Cayendo a escaneo local...")
+
+    # === MODO EMULADOR LOCAL (comportamiento original) ===
     candidates = [5137, 5555, 16384, 7555, 5635, 62001, 62025, 62026, 7556, 7565, 16416] + list(range(5556, 5566)) + list(range(5565, 5756, 10))
 
     def _safe_connect(port: int):
@@ -71,7 +128,14 @@ def discover_device(verbose: bool = False) -> AdbDevice:
         print(f"Online devices after scan: {[d.serial for d in devices]}")
 
     if not devices:
-        raise ConnectionError("No ADB devices came online after scan.")
+        raise ConnectionError(
+            "No ADB devices came online after scan.\n"
+            "Para ADB inalambrico (Android 11+):\n"
+            "  1) Ejecuta adb_pair.bat IP PUERTO_PAREJA CODIGO_8\n"
+            "  2) Ejecuta adb_connect.bat IP PUERTO\n"
+            "  3) Configura 'device_address' en cfg/general_config.toml\n"
+            "  4) Vuelve a lanzar main.py"
+        )
 
     if preferred_port:
         pref = next((d for d in devices if d.serial.endswith(f"{preferred_port}")), None)
